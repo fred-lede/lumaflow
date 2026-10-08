@@ -70,7 +70,10 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
     })?;
 
     let format = required_object(&document, "format")?;
-    let container = normalize_container_name(&required_string(format, "format_name")?);
+    let container = super::resolve_container_name(
+        &required_string(format, "format_name")?,
+        &path_string,
+    )?;
     let duration_seconds = required_f64(format, "duration")?;
     let size_bytes = required_u64(format, "size")?;
     let streams = document
@@ -199,23 +202,6 @@ fn invalid_field(field: &str) -> MediaError {
         "probe_invalid_field",
         format!("FFprobe metadata field '{field}' has an invalid value"),
     )
-}
-
-fn normalize_container_name(format_name: &str) -> String {
-    let names = format_name
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .collect::<Vec<_>>();
-
-    if names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("mp4"))
-    {
-        "mp4".to_owned()
-    } else {
-        names.first().unwrap_or(&format_name).to_ascii_lowercase()
-    }
 }
 
 #[cfg(test)]
@@ -351,6 +337,56 @@ mod tests {
         .expect("real-style MP4 metadata should probe");
 
         assert_eq!(actual.container, "mp4");
+    }
+
+    #[test]
+    fn disambiguates_real_style_mov_format_name_using_mov_extension() {
+        let actual = probe_media(
+            &FakeRunner::successful(REAL_STYLE_MP4_JSON),
+            "/input/movie.mov",
+        )
+        .expect("real-style MOV metadata should probe");
+
+        assert_eq!(actual.container, "mov");
+    }
+
+    #[test]
+    fn disambiguates_real_style_m4a_format_name_using_m4a_extension() {
+        let actual = probe_media(
+            &FakeRunner::successful(REAL_STYLE_MP4_JSON),
+            "/input/audio.m4a",
+        )
+        .expect("real-style M4A metadata should probe");
+
+        assert_eq!(actual.container, "m4a");
+    }
+
+    #[test]
+    fn preserves_explicit_mp4_mov_and_m4a_container_names() {
+        for (format_name, extension) in [("mp4", "mp4"), ("mov", "mov"), ("m4a", "m4a")] {
+            let json = REAL_STYLE_MP4_JSON.replace(
+                "\"mov,mp4,m4a,3gp,3g2,mj2\"",
+                &format!("\"{format_name}\""),
+            );
+            let actual = probe_media(
+                &FakeRunner::successful(&json),
+                format!("/input/media.{extension}"),
+            )
+            .expect("explicit container metadata should probe");
+
+            assert_eq!(actual.container, format_name);
+        }
+    }
+
+    #[test]
+    fn rejects_ambiguous_composite_format_without_known_extension() {
+        let error = probe_media(
+            &FakeRunner::successful(REAL_STYLE_MP4_JSON),
+            "/input/media.bin",
+        )
+        .expect_err("ambiguous composite format should not be guessed");
+
+        assert_eq!(error.code, "unknown_container");
     }
 
     #[test]

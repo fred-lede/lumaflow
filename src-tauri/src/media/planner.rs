@@ -134,6 +134,52 @@ mod tests {
     }
 
     #[test]
+    fn real_style_mov_container_can_remux_to_mov_when_streams_are_compatible() {
+        let mut media = mp4_media();
+        media.path = "/input/movie.mov".to_owned();
+        media.file_name = "movie.mov".to_owned();
+        media.container = "mov,mp4,m4a,3gp,3g2,mj2".to_owned();
+
+        let plan = plan_conversion(&media, &settings(OutputFormat::Mov))
+            .expect("real-style MOV container should remux");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::LosslessRemux { .. }
+        ));
+    }
+
+    #[test]
+    fn real_style_m4a_container_can_remux_to_m4a_when_streams_are_compatible() {
+        let mut media = mp4_media();
+        media.path = "/input/audio.m4a".to_owned();
+        media.file_name = "audio.m4a".to_owned();
+        media.container = "mov,mp4,m4a,3gp,3g2,mj2".to_owned();
+        media.video_streams.clear();
+
+        let plan = plan_conversion(&media, &settings(OutputFormat::M4a))
+            .expect("real-style M4A container should remux");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::LosslessRemux { .. }
+        ));
+    }
+
+    #[test]
+    fn ambiguous_composite_container_returns_unknown_error_without_a_plan() {
+        let mut media = mp4_media();
+        media.path = "/input/media.bin".to_owned();
+        media.file_name = "media.bin".to_owned();
+        media.container = "mov,mp4,m4a,3gp,3g2,mj2".to_owned();
+
+        let error = plan_conversion(&media, &settings(OutputFormat::Mp4))
+            .expect_err("ambiguous composite container should not be guessed");
+
+        assert_eq!(error.code, "unknown_container");
+    }
+
+    #[test]
     fn remux_maps_multiple_audio_tracks_and_subtitles_explicitly() {
         let plan = plan_conversion(&multi_audio_mp4(), &settings(OutputFormat::Mp4))
             .expect("compatible multi-track MP4 should remux");
@@ -304,7 +350,7 @@ use crate::domain::job::ProcessingKind;
 use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings};
 
 use super::ffmpeg_args::{input_and_output_args, ArgumentMode};
-use super::MediaError;
+use super::{resolve_container_name, MediaError};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversionPlan {
@@ -318,9 +364,10 @@ pub fn plan_conversion(
     settings: &OutputSettings,
 ) -> Result<ConversionPlan, MediaError> {
     let output_path = output_path(media, settings)?;
+    let source_container = resolve_container_name(&media.container, &media.path)?;
     let output_format = &settings.format;
     let mode = match output_format {
-        format if normalized_container(&media.container) == format.container_name()
+        format if source_container == format.container_name()
             && streams_fit_container(media, format)
             && !has_stream_setting_changes(settings)
             && settings.lossless_first => ProcessingMode::LosslessRemux(ArgumentMode::AllStreams),
@@ -329,18 +376,21 @@ pub fn plan_conversion(
             ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
         }
         OutputFormat::Flac
-            if is_pcm_source(media)
+            if is_pcm_source(media, &source_container)
                 && !has_stream_setting_changes(settings)
                 && settings.lossless_first =>
         {
             require_audio(media)?;
             ProcessingMode::LosslessAudio(ArgumentMode::FirstAudio)
         }
-        OutputFormat::Flac if is_pcm_source(media) && !has_stream_setting_changes(settings) => {
+        OutputFormat::Flac
+            if is_pcm_source(media, &source_container)
+                && !has_stream_setting_changes(settings) =>
+        {
             require_audio(media)?;
             ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
         }
-        format if normalized_container(&media.container) == format.container_name()
+        format if source_container == format.container_name()
             && streams_fit_container(media, format)
             && !has_stream_setting_changes(settings) => ProcessingMode::Transcoding(if format.is_audio_only() {
                 ArgumentMode::FirstAudio
@@ -427,18 +477,6 @@ fn output_path(media: &MediaInfo, settings: &OutputSettings) -> Result<PathBuf, 
         .join(format!("{stem}.{}", settings.format.extension())))
 }
 
-fn normalized_container(container: &str) -> &str {
-    if container
-        .split(',')
-        .map(str::trim)
-        .any(|name| name.eq_ignore_ascii_case("mp4"))
-    {
-        "mp4"
-    } else {
-        container.split(',').next().unwrap_or(container).trim()
-    }
-}
-
 fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
     match format {
         OutputFormat::Mp4 | OutputFormat::Mov | OutputFormat::M4a => {
@@ -473,8 +511,8 @@ fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
     }
 }
 
-fn is_pcm_source(media: &MediaInfo) -> bool {
-    normalized_container(&media.container) == "wav"
+fn is_pcm_source(media: &MediaInfo, source_container: &str) -> bool {
+    source_container == "wav"
         && media.video_streams.is_empty()
         && media.subtitle_streams.is_empty()
         && !media.audio_streams.is_empty()
