@@ -8,11 +8,17 @@ export const themeModeLabels: Record<ThemeMode, string> = {
   dark: "Dark",
 };
 
+export type ThemeColorScheme = "light" | "dark" | "light dark";
+
 export function nextThemeMode(mode: ThemeMode): ThemeMode {
   const currentIndex = themeModes.indexOf(mode);
   const nextIndex = (currentIndex + 1) % themeModes.length;
 
   return themeModes[nextIndex] ?? "auto";
+}
+
+export function colorSchemeForTheme(mode: ThemeMode): ThemeColorScheme {
+  return mode === "auto" ? "light dark" : mode;
 }
 
 export function applyTheme(
@@ -24,5 +30,5 @@ export function applyTheme(
   }
 
   root.dataset.theme = mode;
-  root.style.colorScheme = mode === "auto" ? "light dark" : mode;
+  root.style.colorScheme = colorSchemeForTheme(mode);
 }

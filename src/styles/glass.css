@@ -35,6 +35,24 @@ input:focus-visible,
   outline-offset: var(--focus-ring-offset);
 }
 
+.skip-link {
+  position: absolute;
+  top: var(--space-3);
+  left: -9999px;
+  z-index: 10;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-solid);
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+}
+
+.skip-link:focus-visible {
+  left: var(--space-4);
+}
+
 .workspace-shell {
   min-height: 100vh;
 }
@@ -101,7 +119,7 @@ p {
   background: var(--color-surface-raised);
   color: var(--color-text);
   cursor: pointer;
-  font-size: var(--font-size-supporting);
+  font-size: var(--font-size-body);
   font-weight: var(--font-weight-medium);
 }
 
@@ -188,6 +206,7 @@ h2 {
   padding: var(--space-4);
   border: var(--border-width) dashed var(--color-border-strong);
   border-radius: var(--radius-md);
+  background: var(--color-surface);
   color: var(--color-text-muted);
   font-size: var(--font-size-body);
 }
@@ -216,14 +235,9 @@ h2 {
   background: var(--color-surface-raised);
   color: var(--color-text);
   cursor: default;
-  font-size: var(--font-size-supporting);
+  font-size: var(--font-size-body);
   font-weight: var(--font-weight-bold);
   white-space: nowrap;
-}
-
-.status-badge:focus-visible {
-  outline: var(--focus-ring-width) solid var(--color-focus);
-  outline-offset: var(--focus-ring-offset);
 }
 
 .status-badge__icon {
@@ -286,19 +300,29 @@ h2 {
 
 @media (prefers-reduced-transparency: reduce) {
   .workspace-topbar,
-  .glass-panel {
+  .glass-panel,
+  .theme-toggle,
+  .status-badge,
+  .empty-state,
+  .skip-link {
     background: var(--color-surface-solid);
     backdrop-filter: none;
   }
 }
 
 @media (forced-colors: active) {
+  :root {
+    --color-surface-solid: Canvas;
+  }
+
   .workspace-topbar,
   .glass-panel,
   .theme-toggle,
-  .status-badge {
+  .status-badge,
+  .empty-state,
+  .skip-link {
     border: 1px solid CanvasText;
-    background: Canvas;
+    background: var(--color-surface-solid);
     box-shadow: none;
     forced-color-adjust: auto;
   }
@@ -311,7 +335,10 @@ h2 {
   }
 
   .workspace-topbar,
-  .glass-panel {
+  .glass-panel,
+  .theme-toggle,
+  .status-badge,
+  .empty-state {
     backdrop-filter: none;
   }
 }

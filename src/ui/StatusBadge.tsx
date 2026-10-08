@@ -19,7 +19,6 @@ export const StatusBadge: FC<StatusBadgeProps> = ({ label, status }) => (
     className={`status-badge status-badge--${status}`}
     data-status={status}
     role="status"
-    tabIndex={0}
   >
     <span className="status-badge__icon" data-status-icon="true" aria-hidden="true">
       {statusIcons[status]}

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { AppShell } from "../app/AppShell";
 import { StatusBadge } from "./StatusBadge";
 
 describe("StatusBadge", () => {
@@ -14,11 +15,13 @@ describe("StatusBadge", () => {
     expect(markup).toContain('aria-hidden="true"');
   });
 
-  it("provides a keyboard focus target for the shared visible focus ring", () => {
-    const markup = renderToStaticMarkup(<StatusBadge status="offline" label="Offline" />);
+  it("keeps passive statuses out of the tab order and focuses the theme control", () => {
+    const badgeMarkup = renderToStaticMarkup(<StatusBadge status="offline" label="Offline" />);
+    const shellMarkup = renderToStaticMarkup(<AppShell />);
 
-    expect(markup).toContain('tabindex="0"');
-    expect(markup).toContain('class="status-badge status-badge--offline"');
+    expect(badgeMarkup).not.toContain("tabindex");
+    expect(shellMarkup).toContain('<button class="theme-toggle" type="button"');
+    expect(shellMarkup).toContain('aria-label="Change theme, currently Auto"');
   });
 
   it("does not rely on color alone to communicate the state", () => {

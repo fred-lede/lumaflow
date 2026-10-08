@@ -23,6 +23,9 @@ export const AppShell: FC = () => {
 
   return (
     <div className="workspace-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
       <header className="workspace-topbar">
         <div>
           <p className="eyebrow">Lossless-first media converter</p>
@@ -42,7 +45,7 @@ export const AppShell: FC = () => {
         </div>
       </header>
 
-      <main className="workspace-main" aria-labelledby="app-title">
+      <main id="main-content" className="workspace-main" aria-labelledby="app-title">
         <div className="workspace-intro">
           <div>
             <p className="eyebrow">Workspace</p>
@@ -69,7 +72,7 @@ export const AppShell: FC = () => {
             <p className="supporting-text">
               Output format and quality controls will appear here when files are added.
             </p>
-            <div className="empty-state" role="note">
+            <div className="empty-state">
               <span className="empty-state__icon" aria-hidden="true">
                 ◌
               </span>
@@ -90,7 +93,7 @@ export const AppShell: FC = () => {
             <p className="supporting-text">
               Conversion progress, recovery actions, and output details will be shown here.
             </p>
-            <div className="empty-state" role="note">
+            <div className="empty-state">
               <span className="empty-state__icon" aria-hidden="true">
                 ≡
               </span>
