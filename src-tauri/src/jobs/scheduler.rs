@@ -9,6 +9,8 @@ use crate::media::planner::ConversionPlan;
 
 pub type EventSink = Arc<dyn Fn(JobEvent) + Send + Sync + 'static>;
 
+pub const DEFAULT_CONCURRENCY: usize = 1;
+
 #[derive(Debug, Clone)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
@@ -88,8 +90,12 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    pub fn with_default_concurrency(executor: Arc<dyn JobExecutor>) -> Self {
+        Self::new(executor, DEFAULT_CONCURRENCY)
+    }
+
     pub fn new(executor: Arc<dyn JobExecutor>, max_concurrency: usize) -> Self {
-        let worker_count = max_concurrency.max(1);
+        let worker_count = max_concurrency.max(DEFAULT_CONCURRENCY);
         let shared = Arc::new(Shared {
             state: Mutex::new(SchedulerState {
                 jobs: HashMap::new(),
@@ -652,6 +658,27 @@ mod tests {
             .expect("second job should start");
 
         assert_eq!(max_active.load(Ordering::SeqCst), 2);
+        gate.release();
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn default_constructor_limits_execution_to_one_job() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let gate = Arc::new(Gate::new());
+        let executor = RecordingExecutor::blocking(started_tx, Arc::clone(&gate));
+        let scheduler = Scheduler::with_default_concurrency(executor);
+
+        scheduler.enqueue(execution("default-one")).expect("job should enqueue");
+        scheduler.enqueue(execution("default-two")).expect("job should enqueue");
+        assert_eq!(
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first job should start"),
+            "default-one"
+        );
+        assert!(started_rx.recv_timeout(Duration::from_millis(40)).is_err());
+
         gate.release();
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
     }
