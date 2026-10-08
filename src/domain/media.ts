@@ -14,15 +14,17 @@ export type AudioStreamInfo = MediaStreamInfo & {
   channels: number;
 };
 
+export type SubtitleStreamInfo = MediaStreamInfo;
+
 export type MediaInfo = {
   path: string;
   fileName: string;
   container: string;
   durationSeconds: number;
   sizeBytes: number;
-  video: VideoStreamInfo | null;
-  audio: AudioStreamInfo | null;
-  hasSubtitles: boolean;
+  videoStreams: VideoStreamInfo[];
+  audioStreams: AudioStreamInfo[];
+  subtitleStreams: SubtitleStreamInfo[];
 };
 
 export type OutputFormat =

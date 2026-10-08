@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { MediaInfo } from "../domain/media";
-import type { JobEvent, QueueJob, QueueSnapshot } from "../domain/job";
+import type { EnqueueJobRequest, JobEvent, QueueSnapshot } from "../domain/job";
 
 export class LumaFlowError extends Error {
   constructor(
@@ -20,7 +20,14 @@ export class LumaFlowError extends Error {
     }
 
     if (error instanceof Error) {
-      return new LumaFlowError("backend_error", error.message);
+      const structuredError = error as Error & {
+        code?: unknown;
+        details?: unknown;
+      };
+      const code =
+        typeof structuredError.code === "string" ? structuredError.code : "backend_error";
+
+      return new LumaFlowError(code, error.message, structuredError.details);
     }
 
     if (typeof error === "string") {
@@ -56,8 +63,8 @@ export function analyzeFiles(paths: string[]): Promise<MediaInfo[]> {
   return invokeLumaFlow<MediaInfo[]>("analyze_files", { paths });
 }
 
-export function enqueueJobs(jobs: QueueJob[]): Promise<QueueSnapshot> {
-  return invokeLumaFlow<QueueSnapshot>("enqueue_jobs", { jobs });
+export function enqueueJobs(requests: EnqueueJobRequest[]): Promise<QueueSnapshot> {
+  return invokeLumaFlow<QueueSnapshot>("enqueue_jobs", { jobs: requests });
 }
 
 export function pauseAll(): Promise<QueueSnapshot> {

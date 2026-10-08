@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { invoke } from "@tauri-apps/api/core";
 
-import { LumaFlowError, analyzeFiles, openOutputFolder } from "./tauri";
+import type { EnqueueJobRequest } from "../domain/job";
+import { LumaFlowError, analyzeFiles, enqueueJobs, openOutputFolder } from "./tauri";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -36,5 +37,69 @@ describe("typed Tauri wrappers", () => {
       code: "path_not_found",
       message: "The selected path does not exist",
     });
+  });
+
+  it("preserves structured fields from object, Error, and string rejections", () => {
+    const objectError = LumaFlowError.from({
+      code: "object_failure",
+      message: "Object failure",
+      details: { retryable: true },
+    });
+    expect(objectError).toMatchObject({
+      code: "object_failure",
+      message: "Object failure",
+      details: { retryable: true },
+    });
+
+    const error = new Error("Error failure") as Error & {
+      code: string;
+      details: string;
+    };
+    error.code = "error_failure";
+    error.details = "ffmpeg exited with status 1";
+    expect(LumaFlowError.from(error)).toMatchObject({
+      code: "error_failure",
+      message: "Error failure",
+      details: "ffmpeg exited with status 1",
+    });
+
+    expect(LumaFlowError.from("String failure")).toMatchObject({
+      code: "backend_error",
+      message: "String failure",
+    });
+  });
+
+  it("accepts enqueue requests without queue state", async () => {
+    mockedInvoke.mockResolvedValue({ jobs: [], paused: false });
+    const request: EnqueueJobRequest = {
+      sourcePath: "/input/one.wav",
+      media: {
+        path: "/input/one.wav",
+        fileName: "one.wav",
+        container: "wav",
+        durationSeconds: 1,
+        sizeBytes: 128,
+        videoStreams: [],
+        audioStreams: [],
+        subtitleStreams: [],
+      },
+      outputSettings: {
+        outputDirectory: "/output",
+        format: "flac",
+        quality: "original",
+        losslessFirst: true,
+        codec: null,
+        bitrateKbps: null,
+        width: null,
+        height: null,
+        frameRate: null,
+        sampleRateHz: null,
+        channels: null,
+      },
+    };
+
+    await enqueueJobs([request]);
+
+    expect(mockedInvoke).toHaveBeenCalledWith("enqueue_jobs", { jobs: [request] });
   });
 });

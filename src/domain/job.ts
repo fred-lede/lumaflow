@@ -40,6 +40,12 @@ export type QueueJob = {
   outputPath: string | null;
 };
 
+export type EnqueueJobRequest = {
+  sourcePath: string;
+  media: MediaInfo;
+  outputSettings: OutputSettings;
+};
+
 export type QueueSnapshot = {
   jobs: QueueJob[];
   paused: boolean;

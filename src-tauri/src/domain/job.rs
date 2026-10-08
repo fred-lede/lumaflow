@@ -60,6 +60,14 @@ pub struct QueueJob {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnqueueJobRequest {
+    pub source_path: String,
+    pub media: MediaInfo,
+    pub output_settings: OutputSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueueSnapshot {
     pub jobs: Vec<QueueJob>,
     pub paused: bool,
@@ -97,22 +105,22 @@ mod tests {
             container: "wav".to_owned(),
             duration_seconds: 12.5,
             size_bytes: 1_024,
-            video: None,
-            audio: Some(AudioStreamInfo {
+            video_streams: vec![],
+            audio_streams: vec![AudioStreamInfo {
                 codec: "pcm_s16le".to_owned(),
                 stream_index: 0,
                 sample_rate_hz: 48_000,
                 channels: 2,
-            }),
-            has_subtitles: false,
+            }],
+            subtitle_streams: vec![],
         }
     }
 
     fn output_settings() -> OutputSettings {
         OutputSettings {
             output_directory: "/output".to_owned(),
-            format: "flac".to_owned(),
-            quality: "original".to_owned(),
+            format: crate::domain::media::OutputFormat::Flac,
+            quality: crate::domain::media::QualityPreset::Original,
             lossless_first: true,
             codec: None,
             bitrate_kbps: None,
@@ -159,14 +167,14 @@ mod tests {
                     "container": "wav",
                     "durationSeconds": 12.5,
                     "sizeBytes": 1024,
-                    "video": null,
-                    "audio": {
+                    "videoStreams": [],
+                    "audioStreams": [{
                         "codec": "pcm_s16le",
                         "streamIndex": 0,
                         "sampleRateHz": 48000,
                         "channels": 2
-                    },
-                    "hasSubtitles": false
+                    }],
+                    "subtitleStreams": []
                 },
                 "outputSettings": {
                     "outputDirectory": "/output",
@@ -214,6 +222,24 @@ mod tests {
                 "outputPath": "/output/file.flac"
             })
         );
+    }
+
+    #[test]
+    fn serializes_enqueue_request_without_backend_owned_state() {
+        let request = super::EnqueueJobRequest {
+            source_path: "/input/file.wav".to_owned(),
+            media: media_info(),
+            output_settings: output_settings(),
+        };
+
+        let value = serde_json::to_value(&request).expect("enqueue request should serialize");
+        assert_eq!(value["sourcePath"], "/input/file.wav");
+        assert!(value.get("state").is_none());
+        assert!(value.get("progress").is_none());
+
+        let decoded: super::EnqueueJobRequest =
+            serde_json::from_value(value).expect("enqueue request should deserialize");
+        assert_eq!(decoded, request);
     }
 
     #[test]
