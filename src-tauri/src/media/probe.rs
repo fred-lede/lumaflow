@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::domain::media::{AudioStreamInfo, MediaInfo, SubtitleStreamInfo, VideoStreamInfo};
 
 use super::MediaError;
+use super::tools::ToolLocator;
 
 pub struct CommandOutput {
     pub status: i32,
@@ -16,11 +17,39 @@ pub trait CommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<CommandOutput, MediaError>;
 }
 
-pub struct ProcessCommandRunner;
+#[derive(Clone)]
+pub struct ProcessCommandRunner {
+    tools: ToolLocator,
+}
+
+impl ProcessCommandRunner {
+    pub fn system() -> Self {
+        Self {
+            tools: ToolLocator::system(),
+        }
+    }
+
+    pub fn with_tools(tools: ToolLocator) -> Self {
+        Self { tools }
+    }
+}
+
+impl Default for ProcessCommandRunner {
+    fn default() -> Self {
+        Self::system()
+    }
+}
 
 impl CommandRunner for ProcessCommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<CommandOutput, MediaError> {
-        let output = std::process::Command::new(program)
+        let executable = self.tools.resolve(program).map_err(|error| {
+            MediaError::with_details(
+                "media_tool_unavailable",
+                "The bundled media tool is not available",
+                error.to_string(),
+            )
+        })?;
+        let output = std::process::Command::new(executable)
             .args(args)
             .output()
             .map_err(|error| {

@@ -13,8 +13,14 @@ pub mod media;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(commands::queue::BackendState::new())
+        .manage(commands::queue::BackendState::bundled())
         .setup(|app| {
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            app.state::<commands::queue::BackendState>()
+                .configure_resource_dir(&resource_dir);
             let handle = app.handle().clone();
             app.state::<commands::queue::BackendState>()
                 .scheduler

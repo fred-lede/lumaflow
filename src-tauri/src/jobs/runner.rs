@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::domain::job::{JobError, JobEvent};
+use crate::media::tools::ToolLocator;
 
 use super::progress::{ProgressParser, ProgressUpdate};
 use super::scheduler::{
@@ -19,18 +20,40 @@ use super::temp_output::{TempOutput, TempOutputError};
 pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
 pub struct FfmpegRunner {
-    program: OsString,
+    program: RunnerProgram,
+}
+
+enum RunnerProgram {
+    Fixed(OsString),
+    Located(ToolLocator),
 }
 
 impl FfmpegRunner {
     pub fn new(program: impl Into<OsString>) -> Self {
         Self {
-            program: program.into(),
+            program: RunnerProgram::Fixed(program.into()),
         }
     }
 
     pub fn system() -> Self {
         Self::new("ffmpeg")
+    }
+
+    pub fn with_tools(tools: ToolLocator) -> Self {
+        Self {
+            program: RunnerProgram::Located(tools),
+        }
+    }
+
+    fn program(&self) -> Result<OsString, JobError> {
+        match &self.program {
+            RunnerProgram::Fixed(program) => Ok(program.clone()),
+            RunnerProgram::Located(tools) => tools.resolve("ffmpeg").map(|path| path.into_os_string()).map_err(|error| JobError {
+                code: "media_tool_unavailable".to_owned(),
+                message: "The bundled FFmpeg executable is not available".to_owned(),
+                details: Some(error.to_string()),
+            }),
+        }
     }
 
     pub fn run(
@@ -74,7 +97,8 @@ impl FfmpegRunner {
             temp.path().as_os_str().to_owned(),
         ]);
 
-        let mut child = Command::new(&self.program)
+        let program = self.program()?;
+        let mut child = Command::new(&program)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

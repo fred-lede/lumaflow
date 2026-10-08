@@ -12,6 +12,7 @@ use crate::domain::media::MediaInfo;
 use crate::jobs::{FfmpegRunner, JobExecution, Scheduler, SchedulerError};
 use crate::media::planner::plan_conversion;
 use crate::media::probe::{probe_media, ProcessCommandRunner};
+use crate::media::tools::ToolLocator;
 use crate::media::MediaError;
 
 use super::CommandError;
@@ -27,13 +28,34 @@ pub struct BackendState {
     pub(crate) authorized_output_paths: Mutex<HashMap<String, PathBuf>>,
     pub(crate) command_lock: Mutex<()>,
     probe: ProbeService,
+    tools: ToolLocator,
 }
 
 impl BackendState {
     pub fn new() -> Self {
-        Self::with_probe(Arc::new(|path| probe_media(&ProcessCommandRunner, path)))
+        Self::with_tools(ToolLocator::system())
     }
 
+    pub fn bundled() -> Self {
+        Self::with_tools(ToolLocator::bundled())
+    }
+
+    fn with_tools(tools: ToolLocator) -> Self {
+        let probe_tools = tools.clone();
+        Self {
+            scheduler: Scheduler::with_default_concurrency(Arc::new(FfmpegRunner::with_tools(tools.clone()))),
+            selected_paths: Mutex::new(HashSet::new()),
+            selected_output_directories: Mutex::new(HashSet::new()),
+            authorized_output_paths: Mutex::new(HashMap::new()),
+            command_lock: Mutex::new(()),
+            probe: Arc::new(move |path| {
+                probe_media(&ProcessCommandRunner::with_tools(probe_tools.clone()), path)
+            }),
+            tools,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_probe(probe: ProbeService) -> Self {
         Self {
             scheduler: Scheduler::with_default_concurrency(Arc::new(FfmpegRunner::system())),
@@ -42,6 +64,7 @@ impl BackendState {
             authorized_output_paths: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             probe,
+            tools: ToolLocator::system(),
         }
     }
 
@@ -54,7 +77,12 @@ impl BackendState {
             authorized_output_paths: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             probe,
+            tools: ToolLocator::system(),
         }
+    }
+
+    pub(crate) fn configure_resource_dir(&self, resource_dir: &std::path::Path) {
+        self.tools.set_resource_dir(resource_dir);
     }
 
     pub(crate) fn remember_selected_path(&self, path: PathBuf) {
