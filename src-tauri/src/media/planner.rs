@@ -180,15 +180,21 @@ mod tests {
     }
 
     #[test]
-    fn remux_maps_multiple_audio_tracks_and_subtitles_explicitly() {
-        let plan = plan_conversion(&multi_audio_mp4(), &settings(OutputFormat::Mp4))
-            .expect("compatible multi-track MP4 should remux");
+    fn mkv_remux_maps_multiple_audio_tracks_and_subtitles_explicitly() {
+        let mut media = multi_audio_mp4();
+        media.container = "matroska".to_owned();
+        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
+            codec: "subrip".to_owned(),
+            stream_index: 3,
+        });
+        let plan = plan_conversion(&media, &settings(OutputFormat::Mkv))
+            .expect("compatible multi-track MKV should remux");
 
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/movie.mp4", "-map", "0:0", "-map", "0:1", "-map", "0:2", "-c",
-                "copy", "/output/movie.mp4"
+                "-i", "/input/movie.mp4", "-map", "0:0", "-map", "0:1", "-map", "0:2", "-map",
+                "0:3", "-c", "copy", "/output/movie.mkv"
             ]
         );
     }
@@ -305,7 +311,37 @@ mod tests {
         let error = plan_conversion(&mp4_media(), &output)
             .expect_err("WebM codec mapping is not proven by the conservative planner");
 
+        assert_eq!(error.code, "unsupported_settings");
+    }
+
+    #[test]
+    fn mkv_transcoding_rejects_subtitles_instead_of_dropping_them() {
+        let mut media = mp4_media();
+        media.container = "matroska".to_owned();
+        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
+            codec: "subrip".to_owned(),
+            stream_index: 2,
+        });
+        let mut output = settings(OutputFormat::Mkv);
+        output.width = Some(1280);
+
+        let error = plan_conversion(&media, &output)
+            .expect_err("MKV transcoding must not silently drop subtitles");
+
         assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn bitrate_is_rejected_for_wav_and_flac_outputs() {
+        for format in [OutputFormat::Wav, OutputFormat::Flac] {
+            let mut output = settings(format);
+            output.bitrate_kbps = Some(192);
+
+            let error = plan_conversion(&wav_media(), &output)
+                .expect_err("lossless WAV/FLAC profiles must reject bitrate settings");
+
+            assert_eq!(error.code, "unsupported_settings");
+        }
     }
 
     #[test]
@@ -481,11 +517,11 @@ mod tests {
     #[test]
     fn supported_video_quality_presets_generate_distinct_explicit_arguments() {
         let mut plans = Vec::new();
-        for quality in [
-            QualityPreset::Original,
-            QualityPreset::High,
-            QualityPreset::Balanced,
-            QualityPreset::Small,
+        for (quality, expected_crf) in [
+            (QualityPreset::Original, "18"),
+            (QualityPreset::High, "20"),
+            (QualityPreset::Balanced, "23"),
+            (QualityPreset::Small, "28"),
         ] {
             let mut output = settings(OutputFormat::Mp4);
             output.quality = quality;
@@ -494,7 +530,9 @@ mod tests {
                 .expect("video quality preset should be supported");
             let arguments = args(&plan);
 
-            assert!(arguments.contains(&"-crf".to_owned()));
+            assert!(arguments
+                .windows(2)
+                .any(|pair| pair == ["-crf", expected_crf]));
             plans.push(arguments);
         }
 
@@ -504,11 +542,11 @@ mod tests {
     #[test]
     fn supported_audio_quality_presets_generate_distinct_explicit_arguments() {
         let mut plans = Vec::new();
-        for quality in [
-            QualityPreset::Original,
-            QualityPreset::High,
-            QualityPreset::Balanced,
-            QualityPreset::Small,
+        for (quality, expected_args) in [
+            (QualityPreset::Original, ["-q:a", "0"]),
+            (QualityPreset::High, ["-b:a", "320k"]),
+            (QualityPreset::Balanced, ["-b:a", "192k"]),
+            (QualityPreset::Small, ["-b:a", "128k"]),
         ] {
             let mut output = settings(OutputFormat::Mp3);
             output.quality = quality;
@@ -516,10 +554,7 @@ mod tests {
                 .expect("MP3 quality preset should be supported");
             let arguments = args(&plan);
 
-            assert!(
-                arguments.contains(&"-q:a".to_owned())
-                    || arguments.contains(&"-b:a".to_owned())
-            );
+            assert!(arguments.windows(2).any(|pair| pair == expected_args));
             plans.push(arguments);
         }
 
@@ -785,6 +820,25 @@ fn validate_target_settings(
 ) -> Result<(), MediaError> {
     validate_numeric_settings(settings)?;
     validate_quality_settings(settings)?;
+
+    if matches!(&settings.format, OutputFormat::Webm) && has_stream_setting_changes(settings) {
+        return Err(MediaError::new(
+            "unsupported_settings",
+            "WebM transcoding is not supported without an explicit WebM codec profile",
+        ));
+    }
+
+    if matches!(&settings.format, OutputFormat::Wav | OutputFormat::Flac)
+        && settings.bitrate_kbps.is_some()
+    {
+        return Err(MediaError::new(
+            "unsupported_settings",
+            format!(
+                "Bitrate is not supported for {} output",
+                settings.format.display_name()
+            ),
+        ));
+    }
 
     let has_video_settings = settings.width.is_some()
         || settings.height.is_some()
