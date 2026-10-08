@@ -7,7 +7,6 @@
     "core:default",
     "core:event:default",
     "dialog:allow-open",
-    "fs:default",
     "fs:allow-read-file",
     "fs:allow-read-dir",
     "fs:allow-stat",
