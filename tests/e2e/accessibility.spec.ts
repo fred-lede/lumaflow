@@ -106,10 +106,15 @@ describe("AppShell accessibility and UI boundary", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Change theme, currently Auto");
     await user.tab();
     expect(document.activeElement?.textContent).toBe("Choose files");
+    await user.keyboard("[Space]");
+    await user.keyboard("[Enter]");
+    expect(document.activeElement?.textContent).toBe("Choose files");
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("textbox"));
     await user.tab();
     expect(document.activeElement?.textContent).toBe("Browse");
+    await user.keyboard("[Enter]");
+    await user.keyboard("[Space]");
 
     const main = screen.getByRole("main");
     expect(main.getAttribute("tabindex")).toBe("-1");

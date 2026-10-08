@@ -1,10 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  loadFixtureSpec,
+  sha256File,
+  validateFixtureManifest,
+} from "../fixtures/contract";
 import { runRealMediaTrace } from "./harness";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -24,19 +29,17 @@ const expectedFixtureNames = [
   "sample.ogg",
 ] as const;
 
-type FixtureManifest = {
-  files: Array<{ name: string; bytes: number; sha256: string }>;
-  ffmpeg: { version: string };
-};
-
-function loadManifest(): FixtureManifest {
+function loadManifest() {
   if (!existsSync(manifestPath)) {
     throw new Error(
       `Fixture manifest is missing at ${manifestPath}. Run ` +
         "LUMAFLOW_FFMPEG_TEST_BIN=/absolute/path/to/ffmpeg npm run fixtures",
     );
   }
-  return JSON.parse(readFileSync(manifestPath, "utf8")) as FixtureManifest;
+  return validateFixtureManifest(
+    JSON.parse(readFileSync(manifestPath, "utf8")) as unknown,
+    loadFixtureSpec(),
+  );
 }
 
 function requiredExecutable(name: string): string {
@@ -64,6 +67,7 @@ describe("real conversion boundary", () => {
       const bytes = readFileSync(path);
       expect(stats.size).toBe(file.bytes);
       expect(createHash("sha256").update(bytes).digest("hex")).toBe(file.sha256);
+      expect(sha256File(path)).toBe(file.sha256);
     }
   });
 
@@ -81,12 +85,12 @@ describe("real conversion boundary", () => {
 
 describe("opt-in desktop E2E protocol", () => {
   it.runIf(process.env.LUMAFLOW_DESKTOP_E2E === "1")(
-    "requires a protocol-aware Tauri runner and explicit pass marker",
+    "requires a protocol-aware Tauri runner and exact nonce-bound JSON pass response",
     () => {
       const runner = requiredExecutable("LUMAFLOW_TAURI_E2E_RUNNER");
       const ffmpeg = requiredExecutable("LUMAFLOW_FFMPEG_TEST_BIN");
       const ffprobe = requiredExecutable("LUMAFLOW_FFPROBE_TEST_BIN");
-      const passMarker = "LUMAFLOW_DESKTOP_E2E_PASS";
+      const nonce = randomUUID();
       const output = execFileSync(runner, ["e2e"], {
         cwd: repoRoot,
         encoding: "utf8",
@@ -94,14 +98,22 @@ describe("opt-in desktop E2E protocol", () => {
           ...process.env,
           LUMAFLOW_DESKTOP_E2E: "1",
           LUMAFLOW_DESKTOP_E2E_PROTOCOL: "1",
-          LUMAFLOW_DESKTOP_E2E_PASS_MARKER: passMarker,
+          LUMAFLOW_DESKTOP_E2E_NONCE: nonce,
           LUMAFLOW_FFMPEG_TEST_BIN: ffmpeg,
           LUMAFLOW_FFPROBE_TEST_BIN: ffprobe,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      expect(output).toContain(passMarker);
+      const lines = output.trim().split(/\r?\n/u);
+      expect(lines).toHaveLength(1);
+      const response = JSON.parse(lines[0] ?? "") as unknown;
+      expect(response).toEqual({
+        protocol: "lumaflow.desktop-e2e",
+        protocolVersion: 1,
+        nonce,
+        result: "pass",
+      });
     },
   );
 });

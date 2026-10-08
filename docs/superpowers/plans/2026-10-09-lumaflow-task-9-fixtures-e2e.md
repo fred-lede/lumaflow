@@ -4,25 +4,29 @@ Goal: add deterministic FFmpeg media fixtures and a default-runnable E2E
 harness that exercises the real Rust probe/planner/scheduler boundary and the
 real React AppShell/intake/queue DOM. Desktop-only checks remain opt-in.
 
-Architecture: the fixture generator requires an explicitly configured pinned
-FFmpeg test executable, generates ten short formats with fixed argument
-vectors, and writes a versioned SHA-256 manifest. The Cargo integration target
-requires the generated files plus explicit FFmpeg and FFprobe executables,
-probes every fixture, asserts planner outcomes, runs the real scheduler, and
-serializes snapshots/events. Vitest runs that target and feeds its serialized
-trace to a Testing Library user-event render of AppShell. No fabricated media
-or mocked planner/backend response is used.
+Architecture: a committed trusted fixture spec defines the exact schema,
+generator version, parameters, codec vectors, and FFmpeg/FFprobe version and
+digest policy. The generator and tests validate manifests against that spec.
+The Cargo integration target requires the generated files plus explicit FFmpeg
+and FFprobe executables, probes every fixture and completed output, asserts
+planner outcomes, runs the real scheduler with RAII cleanup, and serializes
+snapshots/events. Vitest keeps tests/e2e out of ordinary unit runs, then feeds
+the runtime-validated serialized trace to a Testing Library user-event render
+of AppShell. No fabricated media or mocked planner/backend response is used.
 
 ## Task 1: Fixture contract and red E2E specs
 
 Files:
 
 - Create: tests/fixtures/README.md
+- Create: tests/fixtures/spec.json
+- Create: tests/fixtures/contract.ts
 - Create: tests/e2e/conversion-smoke.spec.ts
 - Create: tests/e2e/accessibility.spec.ts
 - Create: tests/e2e/fixtures/.gitkeep
 
 - [x] Define the ten-format manifest and checksum contract.
+- [x] Commit and validate the trusted generation/version/digest specification.
 - [x] Add a real Cargo integration target for FFprobe, planner outcomes, and scheduler trace.
 - [x] Add DOM/user-event tests for intake, batch enqueue, focus, queue actions, and live announcements.
 - [x] Add explicit asset checks and a strict opt-in desktop runner protocol.
@@ -35,8 +39,10 @@ Files:
 - Modify: package.json
 
 - [x] Require LUMAFLOW_FFMPEG_TEST_BIN and validate it as an executable regular file.
+- [x] Require exact configured FFmpeg version and SHA-256 digest from the trusted spec.
 - [x] Generate deterministic MP4, MOV, MKV, WebM, AVI, MP3, M4A, WAV, FLAC, and OGG outputs.
 - [x] Record FFmpeg version, fixed parameters, byte sizes, and SHA-256 checksums.
+- [x] Validate completed FFmpeg output with FFprobe and clean integration temp directories with Drop.
 - [x] Keep generated binaries ignored and fail clearly when the asset is absent.
 
 ## Task 3: Deterministic harness
@@ -47,9 +53,10 @@ Files:
 - Modify: tests/e2e harness and specs
 
 - [x] Run the real Rust integration target by default when test assets are configured.
+- [x] Keep ordinary npm test isolated from tests/e2e and asset requirements.
 - [x] Render AppShell and exercise actual DOM controls with keyboard, focus, click, and user-event interactions.
-- [x] Replay only serialized JobEvents emitted by the real Rust scheduler.
-- [x] Gate desktop E2E on LUMAFLOW_DESKTOP_E2E=1, the e2e argument, protocol env, pass marker, and exit success.
+- [x] Runtime-validate and replay only serialized JobEvents emitted by the real Rust scheduler.
+- [x] Gate desktop E2E on LUMAFLOW_DESKTOP_E2E=1, the e2e argument, nonce, exact JSON response, and exit success.
 
 ## Task 4: Verification and commit
 

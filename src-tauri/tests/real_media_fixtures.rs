@@ -30,6 +30,31 @@ struct PinnedFfprobeRunner {
     program: PathBuf,
 }
 
+struct TempDirectory {
+    path: PathBuf,
+}
+
+impl TempDirectory {
+    fn new(prefix: &str) -> Self {
+        let path = env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).expect("integration output directory should be creatable");
+        Self { path }
+    }
+}
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 impl CommandRunner for PinnedFfprobeRunner {
     fn run(&self, _program: &str, args: &[String]) -> Result<CommandOutput, MediaError> {
         let output = Command::new(&self.program)
@@ -60,6 +85,7 @@ enum ExpectedOutcome {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UiTrace {
+    trace_schema_version: u32,
     source_media: Vec<MediaInfo>,
     output_directory: String,
     snapshots: UiSnapshots,
@@ -198,15 +224,7 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
     let fixture_paths = require_generated_fixtures();
     let fixture_directory = repository_fixture_directory();
     let probe_runner = PinnedFfprobeRunner { program: ffprobe };
-    let output_root = env::temp_dir().join(format!(
-        "lumaflow-real-media-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after epoch")
-            .as_nanos()
-    ));
-    fs::create_dir_all(&output_root).expect("integration output directory should be creatable");
+    let output_root = TempDirectory::new("lumaflow-real-media");
 
     let mut probed = Vec::new();
     for path in &fixture_paths {
@@ -235,13 +253,13 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
         (9, OutputFormat::Ogg, ExpectedOutcome::Unsupported),
     ];
     for (index, output_format, expected) in matrix {
-        assert_outcome(&probed[index], &output_root, output_format, expected);
+        assert_outcome(&probed[index], &output_root.path, output_format, expected);
     }
-    assert_outcome(&probed[0], &output_root, OutputFormat::Mp3, ExpectedOutcome::Transcoding);
-    assert_outcome(&probed[0], &output_root, OutputFormat::Webm, ExpectedOutcome::Unsupported);
+    assert_outcome(&probed[0], &output_root.path, OutputFormat::Mp3, ExpectedOutcome::Transcoding);
+    assert_outcome(&probed[0], &output_root.path, OutputFormat::Webm, ExpectedOutcome::Unsupported);
 
-    let retry_directory = output_root.join("retry");
-    let cancel_directory = output_root.join("cancel");
+    let retry_directory = output_root.path.join("retry");
+    let cancel_directory = output_root.path.join("cancel");
     fs::create_dir_all(&retry_directory).expect("retry output directory should be creatable");
     fs::create_dir_all(&cancel_directory).expect("cancel output directory should be creatable");
     let retry_settings = settings(&retry_directory, OutputFormat::Mp3);
@@ -293,13 +311,32 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
         completed_snapshot.jobs.iter().find(|job| job.id == "retry-job").expect("retry job should exist").state,
         JobState::Completed { .. }
     ));
+    let completed_output = completed_snapshot
+        .jobs
+        .iter()
+        .find(|job| job.id == "retry-job")
+        .and_then(|job| job.output_path.as_deref())
+        .expect("completed retry job should publish an output path");
+    let completed_output_path = PathBuf::from(completed_output);
+    let completed_metadata = fs::metadata(&completed_output_path)
+        .expect("completed conversion output should exist");
+    assert!(
+        completed_metadata.is_file() && completed_metadata.len() > 0,
+        "completed conversion output should be a non-empty regular file"
+    );
+    let completed_media = probe_media(&probe_runner, &completed_output_path)
+        .expect("completed conversion output should be FFprobe-readable");
+    assert_eq!(completed_media.container, "mp3");
+    assert!(!completed_media.audio_streams.is_empty());
+    assert!(completed_media.video_streams.is_empty());
     let all_events = events.lock().expect("event trace lock should succeed").clone();
     let after_retry_events = all_events[before_retry_events.len()..].to_vec();
 
     if let Ok(trace_path) = env::var("LUMAFLOW_E2E_EVENT_TRACE") {
         let trace = UiTrace {
+            trace_schema_version: 1,
             source_media: vec![probed[0].clone(), probed[1].clone()],
-            output_directory: output_root.to_string_lossy().into_owned(),
+            output_directory: output_root.path.to_string_lossy().into_owned(),
             snapshots: UiSnapshots {
                 queued: queued_snapshot,
                 cancelled: cancelled_snapshot,
@@ -318,5 +355,4 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
     }
 
     assert!(fixture_directory.is_dir());
-    let _ = fs::remove_dir_all(output_root);
 }

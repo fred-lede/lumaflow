@@ -3,11 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest",
+    "test": "vitest --exclude 'tests/e2e/**/*.spec.ts'",
+    "test:unit": "vitest --exclude 'tests/e2e/**/*.spec.ts'",
     "test:e2e": "vitest run --environment jsdom tests/e2e",
     "test:ui": "vitest --ui",
     "fixtures": "node --experimental-strip-types scripts/generate-fixtures.ts",

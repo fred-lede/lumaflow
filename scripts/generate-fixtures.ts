@@ -1,144 +1,32 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+import {
+  loadFixtureSpec,
+  parseToolVersion,
+  sha256File,
+  validateFixtureManifest,
+  type FixtureDefinition,
+  type FixtureManifest,
+  type FixtureSpec,
+} from "../tests/fixtures/contract.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const fixtureDirectory = resolve(repoRoot, "tests/fixtures");
 const manifestPath = resolve(fixtureDirectory, "manifest.json");
 const ffmpegEnvironmentVariable = "LUMAFLOW_FFMPEG_TEST_BIN";
 const versionEnvironmentVariable = "LUMAFLOW_FFMPEG_TEST_VERSION";
-const generatorVersion = 1;
 
-type FixtureDefinition = {
+type GeneratedFixture = {
   name: string;
   args: (outputPath: string) => string[];
 };
 
-type FixtureManifest = {
-  schemaVersion: 1;
-  generatorVersion: number;
-  parameters: {
-    durationSeconds: 1;
-    videoSize: "160x90";
-    videoRate: 10;
-    audioFrequencyHz: 440;
-    audioSampleRateHz: 48_000;
-    threads: 1;
-  };
-  ffmpeg: { version: string };
-  files: Array<{ name: string; bytes: number; sha256: string }>;
-};
-
-const deterministicParameters: FixtureManifest["parameters"] = {
-  durationSeconds: 1,
-  videoSize: "160x90",
-  videoRate: 10,
-  audioFrequencyHz: 440,
-  audioSampleRateHz: 48_000,
-  threads: 1,
-};
-
-const sharedFlags = [
-  "-nostdin",
-  "-hide_banner",
-  "-loglevel",
-  "error",
-  "-y",
-  "-threads",
-  "1",
-  "-filter_threads",
-  "1",
-  "-filter_complex_threads",
-  "1",
-  "-fflags",
-  "+bitexact",
-];
-
-const outputMetadataFlags = [
-  "-fflags",
-  "+bitexact",
-  "-flags:v",
-  "+bitexact",
-  "-flags:a",
-  "+bitexact",
-  "-map_metadata",
-  "-1",
-  "-map_chapters",
-  "-1",
-];
-
-const videoInput = ["-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=1"];
-const audioInput = ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1"];
-
-function videoFixture(
-  name: string,
-  videoCodec: string,
-  audioCodec: string,
-  codecFlags: string[],
-): FixtureDefinition {
-  return {
-    name,
-    args: (outputPath) => [
-      ...sharedFlags,
-      ...videoInput,
-      ...audioInput,
-      "-t",
-      "1",
-      "-map",
-      "0:v:0",
-      "-map",
-      "1:a:0",
-      "-c:v",
-      videoCodec,
-      ...codecFlags,
-      "-c:a",
-      audioCodec,
-      "-b:a",
-      "96k",
-      ...outputMetadataFlags,
-      outputPath,
-    ],
-  };
-}
-
-function audioFixture(name: string, codec: string, codecFlags: string[]): FixtureDefinition {
-  return {
-    name,
-    args: (outputPath) => [
-      ...sharedFlags,
-      ...audioInput,
-      "-t",
-      "1",
-      "-vn",
-      "-map",
-      "0:a:0",
-      "-c:a",
-      codec,
-      ...codecFlags,
-      ...outputMetadataFlags,
-      outputPath,
-    ],
-  };
-}
-
-const fixtureDefinitions: FixtureDefinition[] = [
-  videoFixture("sample.mp4", "libx264", "aac", ["-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]),
-  videoFixture("sample.mov", "libx264", "aac", ["-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p"]),
-  videoFixture("sample.mkv", "libx264", "aac", ["-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p", "-cluster_time_limit", "1000"]),
-  videoFixture("sample.webm", "libvpx-vp9", "libopus", ["-b:v", "200k", "-crf", "40", "-deadline", "realtime", "-cpu-used", "8", "-b:a", "64k", "-cluster_time_limit", "1000"]),
-  videoFixture("sample.avi", "mpeg4", "libmp3lame", ["-q:v", "5", "-q:a", "9"]),
-  audioFixture("sample.mp3", "libmp3lame", ["-q:a", "9"]),
-  audioFixture("sample.m4a", "aac", ["-b:a", "96k", "-f", "ipod"]),
-  audioFixture("sample.wav", "pcm_s16le", []),
-  audioFixture("sample.flac", "flac", ["-compression_level", "5"]),
-  audioFixture("sample.ogg", "libopus", ["-b:a", "64k", "-vbr", "on", "-application", "audio", "-serial_offset", "0", "-f", "ogg"]),
-];
-
 function commandFailure(binary: string, args: string[], error: unknown): Error {
   const failure = error as { stderr?: string | Buffer; message?: string };
   const stderr = failure.stderr?.toString().trim() || failure.message || "unknown process error";
-  return new Error(`FFmpeg command failed: ${binary} ${args.join(" ")}\n${stderr}`);
+  return new Error("FFmpeg command failed: " + binary + " " + args.join(" ") + "\n" + stderr);
 }
 
 function run(binary: string, args: string[], label: string): string {
@@ -149,78 +37,145 @@ function run(binary: string, args: string[], label: string): string {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
-    throw new Error(`${label}\n${commandFailure(binary, args, error).message}`);
+    throw new Error(label + "\n" + commandFailure(binary, args, error).message);
   }
 }
 
-function requirePinnedFfmpeg(): { binary: string; version: string } {
+function generatedFixture(definition: FixtureDefinition, spec: FixtureSpec): GeneratedFixture {
+  if (definition.kind === "video") {
+    return {
+      name: definition.name,
+      args: (outputPath) => [
+        ...spec.generation.sharedFlags,
+        ...spec.generation.videoInput,
+        ...spec.generation.audioInput,
+        "-t",
+        String(spec.parameters.durationSeconds),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        definition.videoCodec!,
+        ...definition.codecFlags,
+        "-c:a",
+        definition.audioCodec,
+        ...spec.generation.videoAudioFlags,
+        ...spec.generation.outputMetadataFlags,
+        outputPath,
+      ],
+    };
+  }
+  return {
+    name: definition.name,
+    args: (outputPath) => [
+      ...spec.generation.sharedFlags,
+      ...spec.generation.audioInput,
+      "-t",
+      String(spec.parameters.durationSeconds),
+      "-vn",
+      "-map",
+      "0:a:0",
+      "-c:a",
+      definition.audioCodec,
+      ...definition.codecFlags,
+      ...spec.generation.outputMetadataFlags,
+      outputPath,
+    ],
+  };
+}
+
+function requirePinnedFfmpeg(spec: FixtureSpec): {
+  binary: string;
+  version: string;
+  versionLine: string;
+  sha256: string;
+} {
   const configuredPath = process.env[ffmpegEnvironmentVariable];
   if (!configuredPath) {
     throw new Error(
-      `${ffmpegEnvironmentVariable} is required. Set it to the release-pinned FFmpeg test executable; ` +
-        "the generator will not fall back to ffmpeg on PATH.",
+      ffmpegEnvironmentVariable +
+        " is required. Set it to the release-pinned FFmpeg test executable; the generator will not fall back to ffmpeg on PATH.",
     );
   }
 
   const binary = resolve(configuredPath);
   if (!existsSync(binary)) {
-    throw new Error(`${ffmpegEnvironmentVariable} does not exist: ${binary}`);
+    throw new Error(ffmpegEnvironmentVariable + " does not exist: " + binary);
   }
   const stats = statSync(binary);
   if (!stats.isFile()) {
-    throw new Error(`${ffmpegEnvironmentVariable} must point to a regular file: ${binary}`);
+    throw new Error(ffmpegEnvironmentVariable + " must point to a regular file: " + binary);
   }
   if ((stats.mode & 0o111) === 0) {
-    throw new Error(`${ffmpegEnvironmentVariable} is not executable: ${binary}`);
+    throw new Error(ffmpegEnvironmentVariable + " is not executable: " + binary);
   }
 
-  const version = run(binary, ["-version"], "Could not execute the configured FFmpeg test binary").split("\n")[0]?.trim() ?? "";
-  const requiredVersion = process.env[versionEnvironmentVariable];
-  if (requiredVersion && !version.includes(requiredVersion)) {
+  const versionLine = run(binary, ["-version"], "Could not execute the configured FFmpeg test binary")
+    .split("\n")
+    .find((line) => line.trim().length > 0)
+    ?.trim() ?? "";
+  const version = parseToolVersion(versionLine, "ffmpeg");
+  if (version !== spec.ffmpeg.version) {
     throw new Error(
-      `${versionEnvironmentVariable}=${requiredVersion} does not match the configured binary. ` +
-        `Reported: ${version}`,
+      "Configured FFmpeg version " + version + " does not match trusted fixture spec version " + spec.ffmpeg.version,
     );
   }
-  return { binary, version };
+  const requiredVersion = process.env[versionEnvironmentVariable];
+  if (requiredVersion && requiredVersion !== version) {
+    throw new Error(
+      versionEnvironmentVariable + "=" + requiredVersion + " does not match configured FFmpeg version " + version,
+    );
+  }
+  const sha256 = sha256File(binary);
+  const expectedSha256 = process.env[spec.ffmpeg.sha256Env];
+  if (!expectedSha256) {
+    throw new Error(
+      spec.ffmpeg.sha256Env +
+        " is required and must contain the SHA-256 digest of the configured FFmpeg executable",
+    );
+  }
+  if (expectedSha256 !== sha256) {
+    throw new Error(
+      "Configured FFmpeg SHA-256 " + sha256 + " does not match " + spec.ffmpeg.sha256Env + "=" + expectedSha256,
+    );
+  }
+  return { binary, version, versionLine, sha256 };
 }
 
-function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
-function generateFixtures(binary: string, version: string): FixtureManifest {
+function generateFixtures(binary: string, tool: { version: string; versionLine: string; sha256: string }, spec: FixtureSpec): FixtureManifest {
   if (existsSync(manifestPath)) {
     unlinkSync(manifestPath);
   }
 
   const files: FixtureManifest["files"] = [];
-  for (const definition of fixtureDefinitions) {
+  for (const definition of spec.generation.fixtures.map((entry) => generatedFixture(entry, spec))) {
     const outputPath = resolve(fixtureDirectory, definition.name);
-    const args = definition.args(outputPath);
-    run(binary, args, `Could not generate ${definition.name}`);
+    run(binary, definition.args(outputPath), "Could not generate " + definition.name);
     const stats = statSync(outputPath);
     if (!stats.isFile() || stats.size === 0) {
-      throw new Error(`FFmpeg produced an empty or missing fixture: ${outputPath}`);
+      throw new Error("FFmpeg produced an empty or missing fixture: " + outputPath);
     }
-    files.push({ name: definition.name, bytes: stats.size, sha256: sha256(outputPath) });
+    files.push({ name: definition.name, bytes: stats.size, sha256: sha256File(outputPath) });
   }
 
-  return {
-    schemaVersion: 1,
-    generatorVersion,
-    parameters: deterministicParameters,
-    ffmpeg: { version },
+  const manifest: FixtureManifest = {
+    schemaVersion: spec.schemaVersion,
+    generatorVersion: spec.generatorVersion,
+    parameters: spec.parameters,
+    ffmpeg: tool,
     files,
   };
+  return validateFixtureManifest(manifest, spec);
 }
 
 function main(): void {
-  const { binary, version } = requirePinnedFfmpeg();
-  const manifest = generateFixtures(binary, version);
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  console.log(`Generated ${manifest.files.length} deterministic fixtures with ${version}`);
-  console.log(`Manifest: ${manifestPath}`);
+  const spec = loadFixtureSpec();
+  const tool = requirePinnedFfmpeg(spec);
+  const manifest = generateFixtures(tool.binary, tool, spec);
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  console.log("Generated " + manifest.files.length + " deterministic fixtures with FFmpeg " + tool.version);
+  console.log("Manifest: " + manifestPath);
 }
 
 try {

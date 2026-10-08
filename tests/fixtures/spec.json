@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 2,
+  "generatorVersion": 2,
+  "parameters": {
+    "durationSeconds": 1,
+    "videoSize": "160x90",
+    "videoRate": 10,
+    "audioFrequencyHz": 440,
+    "audioSampleRateHz": 48000,
+    "threads": 1
+  },
+  "ffmpeg": {
+    "versionPolicy": "exact",
+    "version": "8.1.2",
+    "sha256Env": "LUMAFLOW_FFMPEG_TEST_SHA256"
+  },
+  "ffprobe": {
+    "versionPolicy": "exact",
+    "version": "8.1.2",
+    "sha256Env": "LUMAFLOW_FFPROBE_TEST_SHA256"
+  },
+  "generation": {
+    "sharedFlags": [
+      "-nostdin",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-threads",
+      "1",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-fflags",
+      "+bitexact"
+    ],
+    "outputMetadataFlags": [
+      "-fflags",
+      "+bitexact",
+      "-flags:v",
+      "+bitexact",
+      "-flags:a",
+      "+bitexact",
+      "-map_metadata",
+      "-1",
+      "-map_chapters",
+      "-1"
+    ],
+    "videoAudioFlags": [
+      "-b:a",
+      "96k"
+    ],
+    "videoInput": [
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=160x90:rate=10:duration=1"
+    ],
+    "audioInput": [
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=48000:duration=1"
+    ],
+    "fixtures": [
+      {
+        "name": "sample.mp4",
+        "container": "mp4",
+        "kind": "video",
+        "videoCodec": "libx264",
+        "audioCodec": "aac",
+        "codecFlags": [
+          "-preset",
+          "ultrafast",
+          "-crf",
+          "30",
+          "-pix_fmt",
+          "yuv420p",
+          "-movflags",
+          "+faststart"
+        ]
+      },
+      {
+        "name": "sample.mov",
+        "container": "mov",
+        "kind": "video",
+        "videoCodec": "libx264",
+        "audioCodec": "aac",
+        "codecFlags": [
+          "-preset",
+          "ultrafast",
+          "-crf",
+          "30",
+          "-pix_fmt",
+          "yuv420p"
+        ]
+      },
+      {
+        "name": "sample.mkv",
+        "container": "matroska",
+        "kind": "video",
+        "videoCodec": "libx264",
+        "audioCodec": "aac",
+        "codecFlags": [
+          "-preset",
+          "ultrafast",
+          "-crf",
+          "30",
+          "-pix_fmt",
+          "yuv420p",
+          "-cluster_time_limit",
+          "1000"
+        ]
+      },
+      {
+        "name": "sample.webm",
+        "container": "webm",
+        "kind": "video",
+        "videoCodec": "libvpx-vp9",
+        "audioCodec": "libopus",
+        "codecFlags": [
+          "-b:v",
+          "200k",
+          "-crf",
+          "40",
+          "-deadline",
+          "realtime",
+          "-cpu-used",
+          "8",
+          "-b:a",
+          "64k",
+          "-cluster_time_limit",
+          "1000"
+        ]
+      },
+      {
+        "name": "sample.avi",
+        "container": "avi",
+        "kind": "video",
+        "videoCodec": "mpeg4",
+        "audioCodec": "libmp3lame",
+        "codecFlags": [
+          "-q:v",
+          "5",
+          "-q:a",
+          "9"
+        ]
+      },
+      {
+        "name": "sample.mp3",
+        "container": "mp3",
+        "kind": "audio",
+        "audioCodec": "libmp3lame",
+        "codecFlags": [
+          "-q:a",
+          "9"
+        ]
+      },
+      {
+        "name": "sample.m4a",
+        "container": "m4a",
+        "kind": "audio",
+        "audioCodec": "aac",
+        "codecFlags": [
+          "-b:a",
+          "96k",
+          "-f",
+          "ipod"
+        ]
+      },
+      {
+        "name": "sample.wav",
+        "container": "wav",
+        "kind": "audio",
+        "audioCodec": "pcm_s16le",
+        "codecFlags": []
+      },
+      {
+        "name": "sample.flac",
+        "container": "flac",
+        "kind": "audio",
+        "audioCodec": "flac",
+        "codecFlags": [
+          "-compression_level",
+          "5"
+        ]
+      },
+      {
+        "name": "sample.ogg",
+        "container": "ogg",
+        "kind": "audio",
+        "audioCodec": "libopus",
+        "codecFlags": [
+          "-b:a",
+          "64k",
+          "-vbr",
+          "on",
+          "-application",
+          "audio",
+          "-serial_offset",
+          "0",
+          "-f",
+          "ogg"
+        ]
+      }
+    ]
+  }
+}
