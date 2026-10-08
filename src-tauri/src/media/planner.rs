@@ -315,6 +315,21 @@ mod tests {
     }
 
     #[test]
+    fn same_container_webm_without_lossless_first_is_unsupported_settings() {
+        let mut media = mp4_media();
+        media.container = "webm".to_owned();
+        media.video_streams[0].codec = "vp9".to_owned();
+        media.audio_streams[0].codec = "opus".to_owned();
+        let mut output = settings(OutputFormat::Webm);
+        output.lossless_first = false;
+
+        let error = plan_conversion(&media, &output)
+            .expect_err("WebM must not fall through to H.264/AAC transcoding");
+
+        assert_eq!(error.code, "unsupported_settings");
+    }
+
+    #[test]
     fn mkv_transcoding_rejects_subtitles_instead_of_dropping_them() {
         let mut media = mp4_media();
         media.container = "matroska".to_owned();
@@ -327,6 +342,23 @@ mod tests {
 
         let error = plan_conversion(&media, &output)
             .expect_err("MKV transcoding must not silently drop subtitles");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn same_container_mkv_without_lossless_first_rejects_subtitles() {
+        let mut media = mp4_media();
+        media.container = "matroska".to_owned();
+        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
+            codec: "subrip".to_owned(),
+            stream_index: 2,
+        });
+        let mut output = settings(OutputFormat::Mkv);
+        output.lossless_first = false;
+
+        let error = plan_conversion(&media, &output)
+            .expect_err("MKV must not drop subtitles when transcoding is requested");
 
         assert_eq!(error.code, "unsupported_conversion");
     }
@@ -821,10 +853,22 @@ fn validate_target_settings(
     validate_numeric_settings(settings)?;
     validate_quality_settings(settings)?;
 
-    if matches!(&settings.format, OutputFormat::Webm) && has_stream_setting_changes(settings) {
+    if matches!(&settings.format, OutputFormat::Webm)
+        && (!settings.lossless_first || has_stream_setting_changes(settings))
+    {
         return Err(MediaError::new(
             "unsupported_settings",
             "WebM transcoding is not supported without an explicit WebM codec profile",
+        ));
+    }
+
+    if matches!(&settings.format, OutputFormat::Mkv)
+        && !settings.lossless_first
+        && !media.subtitle_streams.is_empty()
+    {
+        return Err(MediaError::new(
+            "unsupported_conversion",
+            "MKV transcoding with subtitle streams is not supported safely",
         ));
     }
 
