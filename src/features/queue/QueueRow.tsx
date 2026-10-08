@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { FC } from "react";
 
 import type { QueueJob } from "../../domain/job";
@@ -6,18 +7,22 @@ import {
   canCancelJob,
   canOpenOutput,
   canRetryJob,
+  canReorderJob,
   processingKindVisibleLabel,
   queueStatusFor,
 } from "./queueLabels";
+import type { QueueJobAction } from "./useQueueEvents";
 
 export type QueueRowProps = {
   isFirst: boolean;
   isLast: boolean;
+  canMoveDown?: boolean;
+  canMoveUp?: boolean;
   job: QueueJob;
+  pendingAction?: QueueJobAction;
   onCancel: (jobId: string) => void;
-  onMoveDown: (jobId: string) => void;
-  onMoveUp: (jobId: string) => void;
-  onOpenOutputFolder: (path: string) => void;
+  onMove: (jobId: string, direction: "up" | "down") => void;
+  onOpenOutputFolder: (jobId: string, path: string) => void;
   onRetry: (jobId: string) => void;
 };
 
@@ -33,19 +38,24 @@ function progressPercent(job: QueueJob): number {
   return Math.round(Math.max(0, Math.min(1, job.progress)) * 100);
 }
 
-export const QueueRow: FC<QueueRowProps> = ({
+export const QueueRow: FC<QueueRowProps> = memo(({
   isFirst,
   isLast,
+  canMoveDown = !isLast,
+  canMoveUp = !isFirst,
   job,
+  pendingAction,
   onCancel,
-  onMoveDown,
-  onMoveUp,
+  onMove,
   onOpenOutputFolder,
   onRetry,
 }) => {
   const status = queueStatusFor(job.state);
   const percentage = progressPercent(job);
   const canOpen = canOpenOutput(job.state.kind) && job.outputPath !== null;
+  const actionLocked = pendingAction !== undefined;
+  const canMoveUpForJob = canReorderJob(job.state.kind) && canMoveUp;
+  const canMoveDownForJob = canReorderJob(job.state.kind) && canMoveDown;
 
   return (
     <li className="queue-row" data-job-id={job.id}>
@@ -82,13 +92,19 @@ export const QueueRow: FC<QueueRowProps> = ({
             <ErrorDetails error={job.state.error} />
           </div>
         ) : null}
+        {job.state.kind === "completed" && job.state.warning ? (
+          <div className="queue-row__warning">
+            <p>{job.state.warning.message}</p>
+            <ErrorDetails error={job.state.warning} />
+          </div>
+        ) : null}
 
-        <div className="queue-row__actions">
+        <div className="queue-row__actions" role="group" aria-label={`${fileNameForJob(job)} actions`}>
           <button
             className="button button--secondary"
             type="button"
             onClick={() => onCancel(job.id)}
-            disabled={!canCancelJob(job.state.kind)}
+            disabled={actionLocked || !canCancelJob(job.state.kind)}
           >
             Cancel
           </button>
@@ -96,23 +112,23 @@ export const QueueRow: FC<QueueRowProps> = ({
             className="button button--secondary"
             type="button"
             onClick={() => onRetry(job.id)}
-            disabled={!canRetryJob(job.state.kind)}
+            disabled={actionLocked || !canRetryJob(job.state.kind)}
           >
             Retry
           </button>
           <button
             className="button button--secondary"
             type="button"
-            onClick={() => job.outputPath && onOpenOutputFolder(job.outputPath)}
-            disabled={!canOpen}
+            onClick={() => job.outputPath && onOpenOutputFolder(job.id, job.outputPath)}
+            disabled={actionLocked || !canOpen}
           >
             Open output folder
           </button>
           <button
             className="icon-button"
             type="button"
-            onClick={() => onMoveUp(job.id)}
-            disabled={isFirst}
+            onClick={() => onMove(job.id, "up")}
+            disabled={actionLocked || !canMoveUpForJob}
             aria-label={`Move ${fileNameForJob(job)} up`}
           >
             ↑
@@ -120,8 +136,8 @@ export const QueueRow: FC<QueueRowProps> = ({
           <button
             className="icon-button"
             type="button"
-            onClick={() => onMoveDown(job.id)}
-            disabled={isLast}
+            onClick={() => onMove(job.id, "down")}
+            disabled={actionLocked || !canMoveDownForJob}
             aria-label={`Move ${fileNameForJob(job)} down`}
           >
             ↓
@@ -130,6 +146,6 @@ export const QueueRow: FC<QueueRowProps> = ({
       </div>
     </li>
   );
-};
+});
 
 export default QueueRow;

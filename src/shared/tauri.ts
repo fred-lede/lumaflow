@@ -97,6 +97,10 @@ export function retryJob(jobId: string): Promise<QueueSnapshot> {
   return invokeLumaFlow<QueueSnapshot>("retry_job", { jobId });
 }
 
+export function reorderJobs(jobIds: string[]): Promise<QueueSnapshot> {
+  return invokeLumaFlow<QueueSnapshot>("reorder_jobs", { jobIds });
+}
+
 export function clearCompleted(): Promise<QueueSnapshot> {
   return invokeLumaFlow<QueueSnapshot>("clear_completed");
 }

@@ -52,6 +52,7 @@ pub enum JobState {
 #[serde(rename_all = "camelCase")]
 pub struct QueueJob {
     pub id: String,
+    pub attempt: u64,
     pub source_path: String,
     pub media: MediaInfo,
     pub output_settings: OutputSettings,
@@ -71,6 +72,7 @@ pub struct EnqueueJobRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueueSnapshot {
+    pub revision: u64,
     pub jobs: Vec<QueueJob>,
     pub paused: bool,
 }
@@ -84,12 +86,18 @@ pub enum JobEvent {
         #[serde(rename = "jobId")]
         job_id: String,
         state: JobState,
+        revision: u64,
+        sequence: u64,
+        attempt: u64,
     },
     #[serde(rename = "progress")]
     Progress {
         #[serde(rename = "jobId")]
         job_id: String,
         progress: f64,
+        revision: u64,
+        sequence: u64,
+        attempt: u64,
     },
 }
 
@@ -138,6 +146,7 @@ mod tests {
     fn serializes_queue_job_with_typescript_field_names() {
         let job = QueueJob {
             id: "job-1".to_owned(),
+            attempt: 0,
             source_path: "/input/file.wav".to_owned(),
             media: media_info(),
             output_settings: output_settings(),
@@ -162,6 +171,7 @@ mod tests {
             value,
             json!({
                 "id": "job-1",
+                "attempt": 0,
                 "sourcePath": "/input/file.wav",
                 "media": {
                     "path": "/input/file.wav",
@@ -250,6 +260,9 @@ mod tests {
         let event = super::JobEvent::Progress {
             job_id: "job-1".to_owned(),
             progress: 0.75,
+            revision: 4,
+            sequence: 7,
+            attempt: 2,
         };
 
         assert_eq!(
@@ -257,7 +270,37 @@ mod tests {
             json!({
                 "kind": "progress",
                 "jobId": "job-1",
-                "progress": 0.75
+                "progress": 0.75,
+                "revision": 4,
+                "sequence": 7,
+                "attempt": 2
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_completion_warning_metadata() {
+        let state = JobState::Completed {
+            label: "Completed".to_owned(),
+            output_path: "/output/file.flac".to_owned(),
+            warning: Some(JobError {
+                code: "cleanup_warning".to_owned(),
+                message: "Temporary cleanup failed".to_owned(),
+                details: Some("temp file".to_owned()),
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(state).expect("completion warning should serialize"),
+            json!({
+                "kind": "completed",
+                "label": "Completed",
+                "outputPath": "/output/file.flac",
+                "warning": {
+                    "code": "cleanup_warning",
+                    "message": "Temporary cleanup failed",
+                    "details": "temp file"
+                }
             })
         );
     }

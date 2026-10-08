@@ -12,7 +12,12 @@ describe("JobState", () => {
       { kind: "losslessRemux", label: "Lossless remux" },
       { kind: "losslessAudio", label: "Lossless audio" },
       { kind: "transcoding", label: "Transcoding" },
-      { kind: "completed", label: "Completed", outputPath: "/output/file.mp4" },
+      {
+        kind: "completed",
+        label: "Completed",
+        outputPath: "/output/file.mp4",
+        warning: { code: "cleanup_warning", message: "Cleanup warning", details: "temp file" },
+      },
       { kind: "cancelled", label: "Cancelled" },
       {
         kind: "failed",

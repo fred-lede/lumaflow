@@ -42,6 +42,7 @@ pub fn run() {
             commands::queue::resume_all,
             commands::queue::cancel_job,
             commands::queue::retry_job,
+            commands::queue::reorder_jobs,
             commands::queue::clear_completed,
         ])
         .run(tauri::generate_context!())
@@ -65,6 +66,7 @@ mod tests {
             "commands::queue::resume_all",
             "commands::queue::cancel_job",
             "commands::queue::retry_job",
+            "commands::queue::reorder_jobs",
             "commands::queue::clear_completed",
         ] {
             assert!(source.contains(command), "missing handler registration: {command}");

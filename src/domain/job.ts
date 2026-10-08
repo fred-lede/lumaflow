@@ -17,7 +17,7 @@ export type JobState =
   | { kind: "losslessRemux"; label: "Lossless remux" }
   | { kind: "losslessAudio"; label: "Lossless audio" }
   | { kind: "transcoding"; label: "Transcoding" }
-  | { kind: "completed"; label: "Completed"; outputPath: string }
+  | { kind: "completed"; label: "Completed"; outputPath: string; warning?: JobError }
   | { kind: "cancelled"; label: "Cancelled" }
   | { kind: "failed"; label: "Failed"; error: JobError };
 
@@ -35,6 +35,7 @@ export type QueueJob = {
   media: MediaInfo;
   outputSettings: OutputSettings;
   processingKind: ProcessingKind | null;
+  attempt: number;
   state: JobState;
   progress: number;
   outputPath: string | null;
@@ -47,10 +48,25 @@ export type EnqueueJobRequest = {
 };
 
 export type QueueSnapshot = {
+  revision: number;
   jobs: QueueJob[];
   paused: boolean;
 };
 
 export type JobEvent =
-  | { kind: "stateChanged"; jobId: string; state: JobState }
-  | { kind: "progress"; jobId: string; progress: number };
+  | {
+      kind: "stateChanged";
+      jobId: string;
+      state: JobState;
+      revision: number;
+      sequence: number;
+      attempt: number;
+    }
+  | {
+      kind: "progress";
+      jobId: string;
+      progress: number;
+      revision: number;
+      sequence: number;
+      attempt: number;
+    };

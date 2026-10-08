@@ -624,6 +624,14 @@ input::placeholder {
   font-weight: var(--font-weight-bold);
 }
 
+.queue-row__warning {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-warning);
+  font-size: var(--font-size-supporting);
+  font-weight: var(--font-weight-bold);
+}
+
 .queue-row__actions {
   flex-wrap: wrap;
 }

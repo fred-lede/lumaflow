@@ -4,6 +4,7 @@ import type { JobState, ProcessingKind } from "../../domain/job";
 import {
   canCancelJob,
   canRetryJob,
+  canReorderJob,
   processingKindVisibleLabel,
   queueStatusFor,
 } from "./queueLabels";
@@ -48,7 +49,7 @@ describe("queue labels", () => {
 
   it("only enables cancellation for work the backend can cancel", () => {
     expect(canCancelJob("queued")).toBe(true);
-    expect(canCancelJob("analyzing")).toBe(true);
+    expect(canCancelJob("analyzing")).toBe(false);
     expect(canCancelJob("losslessRemux")).toBe(true);
     expect(canCancelJob("losslessAudio")).toBe(true);
     expect(canCancelJob("transcoding")).toBe(true);
@@ -61,5 +62,11 @@ describe("queue labels", () => {
     expect(canRetryJob("failed")).toBe(true);
     expect(canRetryJob("queued")).toBe(false);
     expect(canRetryJob("completed")).toBe(false);
+  });
+
+  it("only enables reorder for queued jobs", () => {
+    expect(canReorderJob("queued")).toBe(true);
+    expect(canReorderJob("transcoding")).toBe(false);
+    expect(canReorderJob("completed")).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -118,6 +118,7 @@ pub enum SchedulerError {
     InvalidState,
     InvalidConcurrency,
     CancellationRejected,
+    InvalidOrder,
 }
 
 impl SchedulerError {
@@ -129,6 +130,7 @@ impl SchedulerError {
             Self::InvalidState => "invalid_state",
             Self::InvalidConcurrency => "invalid_concurrency",
             Self::CancellationRejected => "cancellation_rejected",
+            Self::InvalidOrder => "invalid_order",
         }
     }
 }
@@ -136,6 +138,7 @@ impl SchedulerError {
 struct JobRecord {
     execution: JobExecution,
     destination: Option<PathBuf>,
+    attempt: u64,
 }
 
 struct RunningJob {
@@ -150,11 +153,19 @@ struct SchedulerState {
     paused: bool,
     shutdown: bool,
     event_sink: EventSink,
+    revision: u64,
+    sequence: u64,
 }
 
 struct Shared {
     state: Mutex<SchedulerState>,
     changed: Condvar,
+    event_dispatch: Mutex<EventDispatchState>,
+}
+
+struct EventDispatchState {
+    last_sequence: u64,
+    pending: BTreeMap<u64, (EventSink, JobEvent)>,
 }
 
 pub struct Scheduler {
@@ -189,8 +200,14 @@ impl Scheduler {
                 paused: false,
                 shutdown: false,
                 event_sink: Arc::new(|_| {}),
+                revision: 0,
+                sequence: 0,
             }),
             changed: Condvar::new(),
+            event_dispatch: Mutex::new(EventDispatchState {
+                last_sequence: 0,
+                pending: BTreeMap::new(),
+            }),
         });
 
         let mut workers = Vec::with_capacity(worker_count);
@@ -236,12 +253,12 @@ impl Scheduler {
                 .values()
                 .filter_map(|record| record.destination.clone())
                 .collect::<HashSet<_>>();
-            let mut job_ids = HashSet::new();
-            let mut events = Vec::with_capacity(executions.len());
+            let mut seen_job_ids = HashSet::new();
+            let mut job_ids = Vec::with_capacity(executions.len());
 
             for execution in &mut executions {
                 let job_id = execution.job.id.clone();
-                if state.jobs.contains_key(&job_id) || !job_ids.insert(job_id.clone()) {
+                if state.jobs.contains_key(&job_id) || !seen_job_ids.insert(job_id.clone()) {
                     return Err(SchedulerError::DuplicateJob);
                 }
                 execution.job.processing_kind = Some(execution.plan.processing_kind.clone());
@@ -255,10 +272,7 @@ impl Scheduler {
                 if !destinations.insert(destination) {
                     return Err(SchedulerError::DestinationConflict);
                 }
-                events.push(JobEvent::StateChanged {
-                    job_id,
-                    state: execution.job.state.clone(),
-                });
+                job_ids.push(job_id);
             }
 
             for execution in executions {
@@ -271,34 +285,55 @@ impl Scheduler {
                     JobRecord {
                         execution,
                         destination: Some(destination),
+                        attempt: 0,
                     },
                 );
             }
+            let events = job_ids
+                .into_iter()
+                .map(|job_id| {
+                    let job_state = state
+                        .jobs
+                        .get(&job_id)
+                        .expect("enqueued job should exist")
+                        .execution
+                        .job
+                        .state
+                        .clone();
+                    state_event(&mut state, job_id, job_state, 0)
+                })
+                .collect::<Vec<_>>();
             (events, Arc::clone(&state.event_sink))
         };
 
         for event in events {
-            sink(event);
+            dispatch_event(&self.shared, &sink, event);
         }
         self.shared.changed.notify_all();
         Ok(())
     }
 
     pub fn pause(&self) -> Result<(), SchedulerError> {
-        self.shared
+        let mut state = self.shared
             .state
             .lock()
-            .expect("scheduler state lock should succeed")
-            .paused = true;
+            .expect("scheduler state lock should succeed");
+        if !state.paused {
+            state.paused = true;
+            bump_revision(&mut state);
+        }
         Ok(())
     }
 
     pub fn resume(&self) -> Result<(), SchedulerError> {
-        self.shared
+        let mut state = self.shared
             .state
             .lock()
-            .expect("scheduler state lock should succeed")
-            .paused = false;
+            .expect("scheduler state lock should succeed");
+        if state.paused {
+            state.paused = false;
+            bump_revision(&mut state);
+        }
         self.shared.changed.notify_all();
         Ok(())
     }
@@ -330,19 +365,22 @@ impl Scheduler {
                     _ => None,
                 })
                 .unwrap_or_else(|| "Queued".to_owned());
-            let record = state.jobs.get_mut(job_id).expect("job still exists");
-            record.destination = None;
-            record.execution.job.state = JobState::Cancelled { label };
-            record.execution.job.progress = 0.0;
-            (
-                JobEvent::StateChanged {
-                    job_id: job_id.to_owned(),
-                    state: record.execution.job.state.clone(),
-                },
-                Arc::clone(&state.event_sink),
-            )
+            let (next_state, attempt) = {
+                let record = state.jobs.get_mut(job_id).expect("job still exists");
+                record.destination = None;
+                record.execution.job.state = JobState::Cancelled { label };
+                record.execution.job.progress = 0.0;
+                (record.execution.job.state.clone(), record.attempt)
+            };
+            let event = state_event(
+                &mut state,
+                job_id.to_owned(),
+                next_state,
+                attempt,
+            );
+            (event, Arc::clone(&state.event_sink))
         };
-        sink(event);
+        dispatch_event(&self.shared, &sink, event);
         self.shared.changed.notify_all();
         Ok(())
     }
@@ -354,7 +392,7 @@ impl Scheduler {
                 .state
                 .lock()
                 .expect("scheduler state lock should succeed");
-            let next_state = {
+            let (next_state, next_state_attempt) = {
                 let output_path = {
                     let record = state.jobs.get(job_id).ok_or(SchedulerError::JobNotFound)?;
                     if !matches!(record.execution.job.state, JobState::Failed { .. }) {
@@ -376,18 +414,15 @@ impl Scheduler {
                 };
                 record.execution.job.progress = 0.0;
                 record.execution.job.output_path = None;
-                record.execution.job.state.clone()
+                record.attempt += 1;
+                record.execution.job.attempt = record.attempt;
+                (record.execution.job.state.clone(), record.attempt)
             };
             state.pending.push_back(job_id.to_owned());
-            (
-                JobEvent::StateChanged {
-                    job_id: job_id.to_owned(),
-                    state: next_state,
-                },
-                Arc::clone(&state.event_sink),
-            )
+            let event = state_event(&mut state, job_id.to_owned(), next_state, next_state_attempt);
+            (event, Arc::clone(&state.event_sink))
         };
-        sink(event);
+        dispatch_event(&self.shared, &sink, event);
         self.shared.changed.notify_all();
         Ok(())
     }
@@ -399,6 +434,7 @@ impl Scheduler {
             .lock()
             .expect("scheduler state lock should succeed");
         QueueSnapshot {
+            revision: state.revision,
             jobs: state
                 .order
                 .iter()
@@ -406,6 +442,60 @@ impl Scheduler {
                 .collect(),
             paused: state.paused,
         }
+    }
+
+    pub fn reorder(&self, requested_order: Vec<String>) -> Result<(), SchedulerError> {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .expect("scheduler state lock should succeed");
+        let known_ids = state.jobs.keys().collect::<HashSet<_>>();
+        let requested_ids = requested_order.iter().collect::<HashSet<_>>();
+        if requested_order.len() != requested_ids.len() || requested_ids != known_ids {
+            return Err(SchedulerError::InvalidOrder);
+        }
+
+        let queued_ids = state
+            .order
+            .iter()
+            .filter(|id| state.jobs.get(*id).is_some_and(|record| matches!(record.execution.job.state, JobState::Queued { .. })))
+            .cloned()
+            .collect::<HashSet<_>>();
+        let requested_queued = requested_order
+            .iter()
+            .filter(|id| queued_ids.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if requested_queued.len() != queued_ids.len()
+            || requested_queued.iter().cloned().collect::<HashSet<_>>() != queued_ids
+        {
+            return Err(SchedulerError::InvalidOrder);
+        }
+
+        let mut queued = requested_queued.into_iter();
+        let next_order = state
+            .order
+            .iter()
+            .map(|id| {
+                if queued_ids.contains(id) {
+                    queued.next().expect("queued order should be complete")
+                } else {
+                    id.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        if next_order != state.order {
+            state.order = next_order;
+            state.pending = state
+                .order
+                .iter()
+                .filter(|id| state.jobs.get(*id).is_some_and(|record| matches!(record.execution.job.state, JobState::Queued { .. })))
+                .cloned()
+                .collect();
+            bump_revision(&mut state);
+        }
+        Ok(())
     }
 
     pub fn clear_completed(&self) -> Vec<String> {
@@ -433,6 +523,9 @@ impl Scheduler {
         let existing_ids = state.jobs.keys().cloned().collect::<HashSet<_>>();
         state.order.retain(|id| existing_ids.contains(id));
         state.pending.retain(|id| existing_ids.contains(id));
+        if !completed.is_empty() {
+            bump_revision(&mut state);
+        }
         completed
     }
 
@@ -514,35 +607,52 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
                     },
                 );
                 let processing_state = processing_state(&execution.plan.processing_kind);
-                let record = state.jobs.get_mut(&job_id).expect("job still exists");
-                record.execution.job.state = processing_state.clone();
-                record.execution.job.progress = 0.0;
+                let attempt = {
+                    let record = state.jobs.get_mut(&job_id).expect("job still exists");
+                    record.execution.job.state = processing_state.clone();
+                    record.execution.job.progress = 0.0;
+                    record.attempt
+                };
+                let processing_event = state_event(&mut state, job_id.clone(), processing_state, attempt);
                 break (
                     execution,
                     cancellation,
                     Arc::clone(&state.event_sink),
-                    JobEvent::StateChanged {
-                        job_id,
-                        state: processing_state,
-                    },
+                    processing_event,
                 );
             }
         };
 
-        sink(processing_event);
+        dispatch_event(&shared, &sink, processing_event);
         let job_id = execution.job.id.clone();
+        let attempt = execution.job.attempt;
         let progress_sink = {
             let shared = Arc::clone(&shared);
-            let sink = Arc::clone(&sink);
             Arc::new(move |event: JobEvent| {
-                if let JobEvent::Progress { job_id, progress } = &event {
-                    if let Ok(mut state) = shared.state.lock() {
-                        if let Some(record) = state.jobs.get_mut(job_id) {
-                            record.execution.job.progress = progress.clamp(0.0, 1.0);
-                        }
+                let Some((event, sink)) = (|| {
+                    let JobEvent::Progress { job_id, progress, .. } = event else {
+                        return None;
+                    };
+                    let mut state = shared.state.lock().ok()?;
+                    let should_emit = state.jobs.get(&job_id).is_some_and(|record| {
+                        record.attempt == attempt
+                            && !matches!(
+                                record.execution.job.state,
+                                JobState::Completed { .. } | JobState::Cancelled { .. } | JobState::Failed { .. }
+                            )
+                    });
+                    if !should_emit {
+                        return None;
                     }
-                }
-                sink(event);
+                    let record = state.jobs.get_mut(&job_id)?;
+                    let progress = progress.clamp(0.0, 1.0);
+                    record.execution.job.progress = progress;
+                    let event = progress_event(&mut state, job_id, progress, attempt);
+                    Some((event, Arc::clone(&state.event_sink)))
+                })() else {
+                    return;
+                };
+                dispatch_event(&shared, &sink, event);
             }) as EventSink
         };
         let result = executor.execute(execution.clone(), cancellation.clone(), progress_sink);
@@ -583,15 +693,11 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
             } else {
                 record.execution.job.progress
             };
-            (
-                JobEvent::StateChanged {
-                    job_id,
-                    state: next_state,
-                },
-                Arc::clone(&state.event_sink),
-            )
+            let attempt = record.attempt;
+            let event = state_event(&mut state, job_id, next_state, attempt);
+            (event, Arc::clone(&state.event_sink))
         };
-        sink(event);
+        dispatch_event(&shared, &sink, event);
         shared.changed.notify_all();
     }
 }
@@ -607,6 +713,64 @@ fn processing_state(kind: &ProcessingKind) -> JobState {
         ProcessingKind::Transcoding { label } => JobState::Transcoding {
             label: label.clone(),
         },
+    }
+}
+
+fn bump_revision(state: &mut SchedulerState) -> u64 {
+    state.revision = state.revision.saturating_add(1);
+    state.revision
+}
+
+fn dispatch_event(shared: &Shared, sink: &EventSink, event: JobEvent) {
+    let sequence = match &event {
+        JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => *sequence,
+    };
+    let mut dispatch = shared
+        .event_dispatch
+        .lock()
+        .expect("event dispatch lock should succeed");
+    dispatch.pending.insert(sequence, (Arc::clone(sink), event));
+    loop {
+        let next_sequence = dispatch.last_sequence + 1;
+        let Some((next_sink, next_event)) = dispatch.pending.remove(&next_sequence) else {
+            break;
+        };
+        dispatch.last_sequence += 1;
+        next_sink(next_event);
+    }
+}
+
+fn state_event(
+    state: &mut SchedulerState,
+    job_id: String,
+    job_state: JobState,
+    attempt: u64,
+) -> JobEvent {
+    let revision = bump_revision(state);
+    state.sequence = state.sequence.saturating_add(1);
+    JobEvent::StateChanged {
+        job_id,
+        state: job_state,
+        revision,
+        sequence: state.sequence,
+        attempt,
+    }
+}
+
+fn progress_event(
+    state: &mut SchedulerState,
+    job_id: String,
+    progress: f64,
+    attempt: u64,
+) -> JobEvent {
+    let revision = bump_revision(state);
+    state.sequence = state.sequence.saturating_add(1);
+    JobEvent::Progress {
+        job_id,
+        progress,
+        revision,
+        sequence: state.sequence,
+        attempt,
     }
 }
 
@@ -665,13 +829,14 @@ mod tests {
     use std::time::Duration;
 
     use crate::domain::job::{
-        JobError, JobState, ProcessingKind, QueueJob,
+        JobError, JobEvent, JobState, ProcessingKind, QueueJob,
     };
     use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
     use crate::media::planner::ConversionPlan;
 
     use super::{
-        CancellationToken, ExecutionOutcome, JobExecution, JobExecutor, Scheduler, SchedulerError,
+        dispatch_event, CancellationToken, EventSink, ExecutionOutcome, JobExecution, JobExecutor,
+        Scheduler, SchedulerError,
     };
 
     struct Gate {
@@ -835,6 +1000,7 @@ mod tests {
     fn job(id: &str) -> QueueJob {
         QueueJob {
             id: id.to_owned(),
+            attempt: 0,
             source_path: format!("/input/{id}.wav"),
             media: MediaInfo {
                 path: format!("/input/{id}.wav"),
@@ -904,6 +1070,102 @@ mod tests {
             *starts.lock().expect("starts lock should succeed"),
             vec!["first", "second", "third"]
         );
+    }
+
+    #[test]
+    fn reorders_only_queued_jobs_and_preserves_terminal_positions() {
+        let executor = RecordingExecutor::immediate();
+        let scheduler = scheduler(executor, 1);
+        scheduler.enqueue(execution("completed")).expect("job should enqueue");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+
+        scheduler.pause().expect("pause should succeed");
+        scheduler.enqueue(execution("queued-one")).expect("job should enqueue");
+        scheduler.enqueue(execution("queued-two")).expect("job should enqueue");
+        scheduler
+            .reorder(vec!["completed".to_owned(), "queued-two".to_owned(), "queued-one".to_owned()])
+            .expect("queued jobs should reorder");
+
+        assert_eq!(
+            scheduler
+                .snapshot()
+                .jobs
+                .iter()
+                .map(|job| job.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["completed", "queued-two", "queued-one"]
+        );
+        assert_eq!(
+            scheduler.reorder(vec!["completed".to_owned(), "queued-two".to_owned()]),
+            Err(SchedulerError::InvalidOrder)
+        );
+    }
+
+    #[test]
+    fn emits_monotonic_revision_sequence_and_retry_attempt_identity() {
+        let events = Arc::new(Mutex::new(Vec::<JobEvent>::new()));
+        let captured = Arc::clone(&events);
+        let executor = RecordingExecutor::fail_first();
+        let scheduler = scheduler(executor, 1);
+        scheduler.set_event_sink(Arc::new(move |event| {
+            captured.lock().expect("event lock should succeed").push(event);
+        }));
+
+        scheduler.enqueue(execution("retry-metadata")).expect("job should enqueue");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+        scheduler.retry("retry-metadata").expect("failed job should retry");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+
+        let events = events.lock().expect("event lock should succeed");
+        let sequences = events
+            .iter()
+            .map(|event| match event {
+                JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => *sequence,
+            })
+            .collect::<Vec<_>>();
+        assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(events.iter().any(|event| matches!(event, JobEvent::StateChanged { attempt: 1, state: JobState::Queued { .. }, .. })));
+        assert_eq!(scheduler.snapshot().jobs[0].attempt, 1);
+    }
+
+    #[test]
+    fn buffers_out_of_order_event_delivery_until_the_sequence_gap_is_filled() {
+        let scheduler = scheduler(RecordingExecutor::immediate(), 1);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&delivered);
+        let sink: EventSink = Arc::new(move |event: JobEvent| {
+            let sequence = match event {
+                JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => sequence,
+            };
+            captured.lock().expect("event lock should succeed").push(sequence);
+        });
+
+        dispatch_event(
+            &scheduler.shared,
+            &sink,
+            JobEvent::Progress {
+                job_id: "job-1".to_owned(),
+                progress: 0.5,
+                revision: 2,
+                sequence: 2,
+                attempt: 0,
+            },
+        );
+        assert!(delivered.lock().expect("event lock should succeed").is_empty());
+
+        dispatch_event(
+            &scheduler.shared,
+            &sink,
+            JobEvent::Progress {
+                job_id: "job-1".to_owned(),
+                progress: 0.25,
+                revision: 1,
+                sequence: 1,
+                attempt: 0,
+            },
+        );
+
+        assert_eq!(*delivered.lock().expect("event lock should succeed"), vec![1, 2]);
     }
 
     #[test]

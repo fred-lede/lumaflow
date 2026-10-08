@@ -265,6 +265,9 @@ fn emit_progress(
     emit(JobEvent::Progress {
         job_id: job_id.to_owned(),
         progress,
+        revision: 0,
+        sequence: 0,
+        attempt: 0,
     });
 }
 
@@ -424,6 +427,7 @@ mod tests {
         JobExecution {
             job: QueueJob {
                 id: "runner-job".to_owned(),
+                attempt: 0,
                 source_path: source.to_string_lossy().into_owned(),
                 media: MediaInfo {
                     path: source.to_string_lossy().into_owned(),

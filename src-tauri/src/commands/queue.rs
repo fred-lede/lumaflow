@@ -238,6 +238,7 @@ fn preflight_jobs(
         executions.push(JobExecution {
             job: QueueJob {
                 id: job_id,
+                attempt: 0,
                 source_path: media.path.clone(),
                 media,
                 output_settings,
@@ -298,6 +299,18 @@ pub fn retry_job(
 }
 
 #[tauri::command]
+pub fn reorder_jobs(
+    state: State<'_, BackendState>,
+    job_ids: Vec<String>,
+) -> Result<QueueSnapshot, CommandError> {
+    state
+        .scheduler
+        .reorder(job_ids)
+        .map_err(command_error_from_scheduler)?;
+    Ok(state.scheduler.snapshot())
+}
+
+#[tauri::command]
 pub fn clear_completed(
     state: State<'_, BackendState>,
 ) -> Result<QueueSnapshot, CommandError> {
@@ -328,6 +341,7 @@ fn scheduler_message(error: SchedulerError) -> &'static str {
         SchedulerError::InvalidState => "The queue job is not in a valid state for this action",
         SchedulerError::InvalidConcurrency => "The queue concurrency setting is invalid",
         SchedulerError::CancellationRejected => "The running job can no longer be cancelled",
+        SchedulerError::InvalidOrder => "The queue order is invalid",
     }
 }
 
@@ -598,6 +612,7 @@ mod tests {
             (SchedulerError::InvalidState, "invalid_state"),
             (SchedulerError::InvalidConcurrency, "invalid_concurrency"),
             (SchedulerError::CancellationRejected, "cancellation_rejected"),
+            (SchedulerError::InvalidOrder, "invalid_order"),
         ];
 
         for (scheduler_error, expected_code) in cases {

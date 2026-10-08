@@ -9,6 +9,7 @@ import {
   clearCompleted,
   enqueueJobs,
   openOutputFolder,
+  reorderJobs,
   selectOutputFolder,
 } from "./tauri";
 
@@ -41,6 +42,16 @@ describe("typed Tauri wrappers", () => {
 
     expect(mockedInvoke).toHaveBeenNthCalledWith(1, "select_output_folder");
     expect(mockedInvoke).toHaveBeenNthCalledWith(2, "clear_completed");
+  });
+
+  it("passes a validated queue order to the typed reorder command", async () => {
+    mockedInvoke.mockResolvedValue({ revision: 4, jobs: [], paused: false });
+
+    await reorderJobs(["job-2", "job-1"]);
+
+    expect(mockedInvoke).toHaveBeenCalledWith("reorder_jobs", {
+      jobIds: ["job-2", "job-1"],
+    });
   });
 
   it("normalizes backend failures into LumaFlowError", async () => {

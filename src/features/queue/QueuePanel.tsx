@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FC } from "react";
 
+import type { QueueJob } from "../../domain/job";
 import { LumaFlowError } from "../../shared/tauri";
 import GlassPanel from "../../ui/GlassPanel";
-import ErrorDetails from "../errors/ErrorDetails";
-import { canCancelJob } from "./queueLabels";
+import ErrorDetails, { type TechnicalError } from "../errors/ErrorDetails";
+import { canCancelJob, canReorderJob } from "./queueLabels";
 import QueueRow from "./QueueRow";
 import { useQueueEvents, type QueueController } from "./useQueueEvents";
 
@@ -16,10 +17,24 @@ function jobName(job: { media: { fileName: string }; sourcePath: string; id: str
   return job.media.fileName || job.sourcePath.split(/[\\/]/).at(-1) || job.id;
 }
 
+function queuedNeighborIndex(
+  jobs: QueueJob[],
+  index: number,
+  direction: "up" | "down",
+): number {
+  const step = direction === "up" ? -1 : 1;
+  for (let candidate = index + step; candidate >= 0 && candidate < jobs.length; candidate += step) {
+    if (canReorderJob(jobs[candidate].state.kind)) {
+      return candidate;
+    }
+  }
+  return -1;
+}
+
 export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController }) => {
   const { controller, state } = useQueueEvents({ controller: providedController });
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TechnicalError | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const previousStates = useRef(new Map<string, string>());
   const jobs = state.order
@@ -57,11 +72,31 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     try {
       await action();
     } catch (actionError) {
-      setError(LumaFlowError.from(actionError).message);
+      const normalized = LumaFlowError.from(actionError);
+      setError({ code: normalized.code, message: normalized.message, details: normalized.details });
     } finally {
       setBusyAction(null);
     }
   }, []);
+
+  const isBusy = busyAction !== null || state.pendingGlobalAction !== null;
+  const handleCancel = useCallback(
+    (jobId: string) => void runAction(`cancel-${jobId}`, () => controller.cancelJob(jobId)),
+    [controller, runAction],
+  );
+  const handleRetry = useCallback(
+    (jobId: string) => void runAction(`retry-${jobId}`, () => controller.retryJob(jobId)),
+    [controller, runAction],
+  );
+  const handleOpenOutputFolder = useCallback(
+    (jobId: string, path: string) => void runAction(`open-${jobId}`, () => controller.openOutputFolder(jobId, path)),
+    [controller, runAction],
+  );
+  const handleMove = useCallback(
+    (jobId: string, direction: "up" | "down") =>
+      void runAction(`reorder-${jobId}`, () => controller.moveJob(jobId, direction)),
+    [controller, runAction],
+  );
 
   return (
     <GlassPanel className="queue-panel" labelledBy="queue-title" role="region">
@@ -78,12 +113,12 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
         Monitor local conversions, recover failures, and adjust the display order with the keyboard.
       </p>
 
-      <div className="queue-toolbar" aria-label="Queue actions">
+      <div className="queue-toolbar" role="toolbar" aria-label="Queue actions" aria-busy={isBusy}>
         <button
           className="button button--secondary"
           type="button"
           onClick={() => void runAction("pause", controller.pauseAll)}
-          disabled={state.paused || activeJobs.length === 0 || busyAction !== null}
+          disabled={state.paused || activeJobs.length === 0 || isBusy}
         >
           Pause all
         </button>
@@ -91,7 +126,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
           className="button button--secondary"
           type="button"
           onClick={() => void runAction("resume", controller.resumeAll)}
-          disabled={!state.paused || busyAction !== null}
+          disabled={!state.paused || isBusy}
         >
           Resume all
         </button>
@@ -105,7 +140,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
               }
             })
           }
-          disabled={activeJobs.length === 0 || busyAction !== null}
+          disabled={activeJobs.length === 0 || isBusy}
         >
           Cancel active
         </button>
@@ -113,16 +148,23 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
           className="button button--secondary"
           type="button"
           onClick={() => void runAction("clear", controller.clearCompleted)}
-          disabled={completedJobs.length === 0 || busyAction !== null}
+          disabled={completedJobs.length === 0 || isBusy}
         >
           Clear completed
         </button>
       </div>
 
+      {state.eventError ? (
+        <div className="inline-error queue-panel__error" role="alert">
+          <p>{state.eventError.message}</p>
+          <ErrorDetails error={state.eventError} />
+        </div>
+      ) : null}
+
       {error ? (
         <div className="inline-error queue-panel__error" role="alert">
-          <p>{error}</p>
-          <ErrorDetails error={{ code: "queue_action_failed", message: error }} />
+          <p>{error.message}</p>
+          <ErrorDetails error={error} />
         </div>
       ) : null}
 
@@ -137,13 +179,15 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
             <QueueRow
               key={job.id}
               job={job}
+              pendingAction={state.pendingActions[job.id]}
               isFirst={index === 0}
               isLast={index === jobs.length - 1}
-              onCancel={(jobId) => void runAction(`cancel-${jobId}`, () => controller.cancelJob(jobId))}
-              onMoveDown={(jobId) => controller.moveJob(jobId, "down")}
-              onMoveUp={(jobId) => controller.moveJob(jobId, "up")}
-              onOpenOutputFolder={(path) => void runAction(`open-${job.id}`, () => controller.openOutputFolder(path))}
-              onRetry={(jobId) => void runAction(`retry-${jobId}`, () => controller.retryJob(jobId))}
+              canMoveUp={canReorderJob(job.state.kind) && queuedNeighborIndex(jobs, index, "up") >= 0}
+              canMoveDown={canReorderJob(job.state.kind) && queuedNeighborIndex(jobs, index, "down") >= 0}
+              onCancel={handleCancel}
+              onMove={handleMove}
+              onOpenOutputFolder={handleOpenOutputFolder}
+              onRetry={handleRetry}
             />
           ))}
         </ol>

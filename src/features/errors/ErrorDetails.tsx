@@ -1,10 +1,25 @@
 import type { FC } from "react";
 
-import type { JobError } from "../../domain/job";
+export type TechnicalError = {
+  code: string;
+  message: string;
+  details?: unknown;
+};
 
 export type ErrorDetailsProps = {
-  error: JobError;
+  error: TechnicalError;
 };
+
+function formatDetails(details: unknown): string {
+  if (typeof details === "string") {
+    return details;
+  }
+  try {
+    return JSON.stringify(details, null, 2) ?? String(details);
+  } catch {
+    return String(details);
+  }
+}
 
 export const ErrorDetails: FC<ErrorDetailsProps> = ({ error }) => (
   <details className="error-details">
@@ -17,7 +32,7 @@ export const ErrorDetails: FC<ErrorDetailsProps> = ({ error }) => (
       {error.details ? (
         <div>
           <dt>Backend details</dt>
-          <dd><pre>{error.details}</pre></dd>
+          <dd><pre>{formatDetails(error.details)}</pre></dd>
         </div>
       ) : null}
     </dl>

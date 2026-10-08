@@ -34,7 +34,7 @@ export function processingKindVisibleLabel(kind: ProcessingKind | null): string 
 }
 
 export function canCancelJob(kind: JobState["kind"]): boolean {
-  return ["queued", "analyzing", "losslessRemux", "losslessAudio", "transcoding"].includes(kind);
+  return ["queued", "losslessRemux", "losslessAudio", "transcoding"].includes(kind);
 }
 
 export function canRetryJob(kind: JobState["kind"]): boolean {
@@ -43,4 +43,8 @@ export function canRetryJob(kind: JobState["kind"]): boolean {
 
 export function canOpenOutput(kind: JobState["kind"]): boolean {
   return kind === "completed";
+}
+
+export function canReorderJob(kind: JobState["kind"]): boolean {
+  return kind === "queued";
 }
