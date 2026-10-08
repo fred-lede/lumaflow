@@ -9,14 +9,19 @@ import {
 } from "./theme";
 import DropZone from "../features/intake/DropZone";
 import SourceFileList from "../features/intake/SourceFileList";
-import { useFileIntake } from "../features/intake/useFileIntake";
+import { useFileIntake, type FileIntakeAdapter } from "../features/intake/useFileIntake";
 import QueuePanel from "../features/queue/QueuePanel";
-import { useQueueEvents } from "../features/queue/useQueueEvents";
+import {
+  useQueueEvents,
+  type QueueCommandAdapter,
+  type QueueEventAdapter,
+} from "../features/queue/useQueueEvents";
 import OutputSettings from "../features/settings/OutputSettings";
 import { useConversionSettings } from "../features/settings/useConversionSettings";
-import { LumaFlowError, selectOutputFolder } from "../shared/tauri";
+import { LumaFlowError, selectOutputFolder as selectOutputFolderCommand } from "../shared/tauri";
 import GlassPanel from "../ui/GlassPanel";
 import StatusBadge from "../ui/StatusBadge";
+import type { QueueSnapshot } from "../domain/job";
 
 export function handleSkipLinkActivation(
   event: Pick<ReactMouseEvent<HTMLAnchorElement>, "preventDefault" | "currentTarget">,
@@ -25,15 +30,34 @@ export function handleSkipLinkActivation(
   event.currentTarget.ownerDocument.getElementById("main-content")?.focus();
 }
 
-export const AppShell: FC = () => {
+export type AppShellProps = {
+  initialQueueSnapshot?: QueueSnapshot;
+  intakeAdapter?: Partial<FileIntakeAdapter>;
+  queueCommands?: Partial<QueueCommandAdapter>;
+  queueEventAdapter?: QueueEventAdapter;
+  selectOutputFolder?: () => Promise<string | null>;
+};
+
+export const AppShell: FC<AppShellProps> = ({
+  initialQueueSnapshot,
+  intakeAdapter: providedIntakeAdapter,
+  queueCommands,
+  queueEventAdapter,
+  selectOutputFolder = selectOutputFolderCommand,
+}) => {
   const [themeMode, setThemeMode] = useState<ThemeMode>("auto");
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const queue = useQueueEvents();
+  const queue = useQueueEvents({
+    commands: queueCommands,
+    eventAdapter: queueEventAdapter,
+    initialSnapshot: initialQueueSnapshot,
+  });
   const intakeAdapter = useMemo(
     () => ({
+      ...providedIntakeAdapter,
       enqueueJobs: queue.controller.enqueueJobs,
     }),
-    [queue.controller],
+    [providedIntakeAdapter, queue.controller],
   );
   const intake = useFileIntake({ adapter: intakeAdapter });
   const conversion = useConversionSettings();
@@ -56,7 +80,7 @@ export const AppShell: FC = () => {
     } catch (error) {
       setSettingsError(LumaFlowError.from(error).message);
     }
-  }, [conversion.setSettings]);
+  }, [conversion.setSettings, selectOutputFolder]);
 
   const handleStartConversion = useCallback(async () => {
     setSettingsError(null);
