@@ -11,6 +11,19 @@ pub struct TempOutput {
     file: Option<File>,
 }
 
+#[derive(Debug)]
+pub struct TempOutputCommit {
+    pub final_path: PathBuf,
+    pub cleanup_warning: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum TempOutputError {
+    DestinationExists,
+    PublicationUnavailable { details: String },
+    Io(io::Error),
+}
+
 impl TempOutput {
     pub fn create(final_path: impl AsRef<Path>) -> io::Result<Self> {
         let final_path = final_path.as_ref().to_owned();
@@ -65,35 +78,83 @@ impl TempOutput {
         self.file.take();
     }
 
-    pub fn commit(self) -> io::Result<PathBuf> {
-        self.commit_inner(None::<fn()>)
+    pub fn commit(self) -> Result<TempOutputCommit, TempOutputError> {
+        self.commit_inner(
+            None::<fn()>,
+            |source, destination| fs::hard_link(source, destination),
+            |path| remove_if_present(path),
+        )
     }
 
-    fn commit_inner<F: FnOnce()>(mut self, before_publish: Option<F>) -> io::Result<PathBuf> {
+    fn commit_inner<F, P, C>(
+        mut self,
+        before_publish: Option<F>,
+        publish: P,
+        cleanup: C,
+    ) -> Result<TempOutputCommit, TempOutputError>
+    where
+        F: FnOnce(),
+        P: FnOnce(&Path, &Path) -> io::Result<()>,
+        C: FnOnce(&Path) -> io::Result<()>,
+    {
         let file = match self.file.take() {
             Some(file) => file,
-            None => OpenOptions::new().read(true).write(true).open(&self.path)?,
+            None => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.path)
+                .map_err(TempOutputError::Io)?,
         };
-        file.sync_all()?;
+        file.sync_all().map_err(TempOutputError::Io)?;
         drop(file);
         if let Some(before_publish) = before_publish {
             before_publish();
         }
 
-        match fs::hard_link(&self.path, &self.final_path) {
+        match publish(&self.path, &self.final_path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return Err(destination_exists_error());
+                return Err(TempOutputError::DestinationExists);
             }
-            Err(error) => return Err(error),
+            Err(_error) if destination_exists(&self.final_path).unwrap_or(false) => {
+                return Err(TempOutputError::DestinationExists);
+            }
+            Err(error) => {
+                return Err(TempOutputError::PublicationUnavailable {
+                    details: error.to_string(),
+                });
+            }
         }
-        remove_if_present(&self.path)?;
-        Ok(self.final_path.clone())
+        let cleanup_warning = cleanup(&self.path).err().map(|error| error.to_string());
+        Ok(TempOutputCommit {
+            final_path: self.final_path.clone(),
+            cleanup_warning,
+        })
     }
 
     #[cfg(test)]
-    fn commit_for_test(self, before_publish: impl FnOnce()) -> io::Result<PathBuf> {
-        self.commit_inner(Some(before_publish))
+    fn commit_for_test(
+        self,
+        before_publish: impl FnOnce(),
+        cleanup: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> Result<TempOutputCommit, TempOutputError> {
+        self.commit_inner(
+            Some(before_publish),
+            |source, destination| fs::hard_link(source, destination),
+            cleanup,
+        )
+    }
+
+    #[cfg(test)]
+    fn commit_with_publish_error_for_test(
+        self,
+        error: io::Error,
+    ) -> Result<TempOutputCommit, TempOutputError> {
+        self.commit_inner(
+            None::<fn()>,
+            move |_, _| Err(io::Error::new(error.kind(), error.to_string())),
+            |path| remove_if_present(path),
+        )
     }
 
     pub fn cleanup(mut self) -> io::Result<()> {
@@ -137,7 +198,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::TempOutput;
+    use super::{TempOutput, TempOutputError};
 
     fn destination() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -222,11 +283,60 @@ mod tests {
         let error = temp
             .commit_for_test(|| {
                 fs::write(&final_path, b"original").expect("destination should be created");
-            })
+            }, remove_temp)
             .expect_err("commit should not replace destination");
 
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(matches!(error, TempOutputError::DestinationExists));
         assert_eq!(fs::read(final_path).expect("existing output should remain"), b"original");
+        assert!(!temp_path.exists());
+    }
+
+    fn remove_temp(path: &std::path::Path) -> std::io::Result<()> {
+        fs::remove_file(path)
+    }
+
+    #[test]
+    fn reports_publication_cleanup_warning_after_successful_no_replace_link() {
+        let directory = destination();
+        let final_path = directory.join("cleanup-warning.flac");
+        let temp = TempOutput::create(&final_path).expect("temp should be created");
+        fs::write(temp.path(), b"published").expect("test output should be writable");
+
+        let publication = temp
+            .commit_for_test(|| {}, |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated temporary cleanup failure",
+                ))
+            })
+            .expect("publication should succeed despite cleanup warning");
+
+        assert_eq!(fs::read(&final_path).expect("published output should exist"), b"published");
+        assert_eq!(
+            publication.cleanup_warning.as_deref(),
+            Some("simulated temporary cleanup failure")
+        );
+        drop(publication);
+        let _ = fs::remove_file(&final_path);
+    }
+
+    #[test]
+    fn reports_clear_capability_error_without_fallback_publication() {
+        let directory = destination();
+        let final_path = directory.join("unsupported-publication.flac");
+        let temp = TempOutput::create(&final_path).expect("temp should be created");
+        fs::write(temp.path(), b"not published").expect("test output should be writable");
+        let temp_path = temp.path().to_owned();
+
+        let error = temp
+            .commit_with_publish_error_for_test(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "hard links are unsupported",
+            ))
+            .expect_err("unsupported publication should fail");
+
+        assert!(matches!(error, TempOutputError::PublicationUnavailable { details } if details.contains("hard links are unsupported")));
+        assert!(!final_path.exists());
         assert!(!temp_path.exists());
     }
 }

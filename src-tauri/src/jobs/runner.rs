@@ -11,8 +11,10 @@ use std::time::Duration;
 use crate::domain::job::{JobError, JobEvent};
 
 use super::progress::{ProgressParser, ProgressUpdate};
-use super::scheduler::{CancellationToken, EventSink, JobExecution, JobExecutor};
-use super::temp_output::TempOutput;
+use super::scheduler::{
+    CancellationToken, EventSink, ExecutionOutcome, JobExecution, JobExecutor,
+};
+use super::temp_output::{TempOutput, TempOutputError};
 
 pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
@@ -36,7 +38,7 @@ impl FfmpegRunner {
         execution: JobExecution,
         cancellation: CancellationToken,
         emit: EventSink,
-    ) -> Result<(), JobError> {
+    ) -> Result<ExecutionOutcome, JobError> {
         if cancellation.is_cancelled() {
             return Err(cancelled_error());
         }
@@ -202,21 +204,36 @@ impl FfmpegRunner {
             .begin_commit()
             .map_err(|_| cancelled_error())?;
         match temp.commit() {
-            Ok(_) => {
+            Ok(publication) => {
+                let cleanup_warning = publication.cleanup_warning.map(|details| JobError {
+                    code: "temp_cleanup_failed".to_owned(),
+                    message: "The converted output was published, but temporary cleanup failed"
+                        .to_owned(),
+                    details: Some(details),
+                });
                 commit.finish(true);
-                Ok(())
+                Ok(ExecutionOutcome { cleanup_warning })
             }
-            Err(error) => {
+            Err(TempOutputError::DestinationExists) => {
                 commit.finish(false);
-                Err(if error.kind() == io::ErrorKind::AlreadyExists {
-                    destination_exists_error()
-                } else {
-                    io_error(
-                        "output_commit_failed",
-                        "Could not commit the converted output",
-                        error,
-                    )
+                Err(destination_exists_error())
+            }
+            Err(TempOutputError::PublicationUnavailable { details }) => {
+                commit.finish(false);
+                Err(JobError {
+                    code: "filesystem_capability".to_owned(),
+                    message: "The filesystem does not support safe no-replace output publication"
+                        .to_owned(),
+                    details: Some(details),
                 })
+            }
+            Err(TempOutputError::Io(error)) => {
+                commit.finish(false);
+                Err(io_error(
+                    "output_commit_failed",
+                    "Could not commit the converted output",
+                    error,
+                ))
             }
         }
     }
@@ -228,7 +245,7 @@ impl JobExecutor for FfmpegRunner {
         execution: JobExecution,
         cancellation: CancellationToken,
         emit: EventSink,
-    ) -> Result<(), JobError> {
+    ) -> Result<ExecutionOutcome, JobError> {
         self.run(execution, cancellation, emit)
     }
 }

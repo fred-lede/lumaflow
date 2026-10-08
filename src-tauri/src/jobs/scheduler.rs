@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -95,13 +96,18 @@ pub struct JobExecution {
     pub plan: ConversionPlan,
 }
 
+#[derive(Debug, Default)]
+pub struct ExecutionOutcome {
+    pub cleanup_warning: Option<JobError>,
+}
+
 pub trait JobExecutor: Send + Sync + 'static {
     fn execute(
         &self,
         execution: JobExecution,
         cancellation: CancellationToken,
         emit: EventSink,
-    ) -> Result<(), JobError>;
+    ) -> Result<ExecutionOutcome, JobError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,7 +135,7 @@ impl SchedulerError {
 
 struct JobRecord {
     execution: JobExecution,
-    destination: PathBuf,
+    destination: Option<PathBuf>,
 }
 
 struct RunningJob {
@@ -230,11 +236,12 @@ impl Scheduler {
             if state.jobs.contains_key(&job_id) {
                 return Err(SchedulerError::DuplicateJob);
             }
+            release_stale_completed_destinations(&mut state);
             let destination = canonical_destination(&execution.plan.output_path);
             if state
                 .jobs
                 .values()
-                .any(|record| record.destination == destination)
+                .any(|record| record.destination.as_ref() == Some(&destination))
             {
                 return Err(SchedulerError::DestinationConflict);
             }
@@ -244,7 +251,7 @@ impl Scheduler {
                 job_id,
                 JobRecord {
                     execution,
-                    destination,
+                    destination: Some(destination),
                 },
             );
             Arc::clone(&state.event_sink)
@@ -301,6 +308,7 @@ impl Scheduler {
                 })
                 .unwrap_or_else(|| "Queued".to_owned());
             let record = state.jobs.get_mut(job_id).expect("job still exists");
+            record.destination = None;
             record.execution.job.state = JobState::Cancelled { label };
             record.execution.job.progress = 0.0;
             (
@@ -324,10 +332,22 @@ impl Scheduler {
                 .lock()
                 .expect("scheduler state lock should succeed");
             let next_state = {
-                let record = state.jobs.get_mut(job_id).ok_or(SchedulerError::JobNotFound)?;
-                if !matches!(record.execution.job.state, JobState::Failed { .. }) {
-                    return Err(SchedulerError::InvalidState);
+                let output_path = {
+                    let record = state.jobs.get(job_id).ok_or(SchedulerError::JobNotFound)?;
+                    if !matches!(record.execution.job.state, JobState::Failed { .. }) {
+                        return Err(SchedulerError::InvalidState);
+                    }
+                    record.execution.plan.output_path.clone()
+                };
+                release_stale_completed_destinations(&mut state);
+                let destination = canonical_destination(&output_path);
+                if state.jobs.iter().any(|(id, other)| {
+                    id != job_id && other.destination.as_ref() == Some(&destination)
+                }) {
+                    return Err(SchedulerError::DestinationConflict);
                 }
+                let record = state.jobs.get_mut(job_id).expect("job still exists");
+                record.destination = Some(destination);
                 record.execution.job.state = JobState::Queued {
                     label: "Queued".to_owned(),
                 };
@@ -480,23 +500,30 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
             state.running.remove(&job_id);
             let record = state.jobs.get_mut(&job_id).expect("running job should exist");
             let next_state = if cancellation.is_cancelled() {
+                record.destination = None;
                 JobState::Cancelled {
                     label: "Cancelled".to_owned(),
                 }
             } else {
                 match result {
-                    Ok(()) => {
+                    Ok(outcome) => {
                         let output_path = execution.plan.output_path.to_string_lossy().into_owned();
                         record.execution.job.output_path = Some(output_path.clone());
+                        record.destination = destination_entry_exists(&execution.plan.output_path)
+                            .then(|| canonical_destination(&execution.plan.output_path));
                         JobState::Completed {
                             label: "Completed".to_owned(),
                             output_path,
+                            warning: outcome.cleanup_warning,
                         }
                     }
-                    Err(error) => JobState::Failed {
-                        label: "Failed".to_owned(),
-                        error,
-                    },
+                    Err(error) => {
+                        record.destination = None;
+                        JobState::Failed {
+                            label: "Failed".to_owned(),
+                            error,
+                        }
+                    }
                 }
             };
             record.execution.job.state = next_state.clone();
@@ -545,6 +572,23 @@ fn canonical_destination(path: &Path) -> PathBuf {
     parent.join(absolute.file_name().unwrap_or_default())
 }
 
+fn destination_entry_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn release_stale_completed_destinations(state: &mut SchedulerState) {
+    for record in state.jobs.values_mut() {
+        if matches!(record.execution.job.state, JobState::Completed { .. })
+            && record
+                .destination
+                .as_ref()
+                .is_some_and(|destination| !destination_entry_exists(destination))
+        {
+            record.destination = None;
+        }
+    }
+}
+
 fn lexical_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -575,7 +619,9 @@ mod tests {
     use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
     use crate::media::planner::ConversionPlan;
 
-    use super::{CancellationToken, JobExecution, JobExecutor, Scheduler, SchedulerError};
+    use super::{
+        CancellationToken, ExecutionOutcome, JobExecution, JobExecutor, Scheduler, SchedulerError,
+    };
 
     struct Gate {
         open: Mutex<bool>,
@@ -657,7 +703,7 @@ mod tests {
             execution: JobExecution,
             cancellation: CancellationToken,
             _emit: super::EventSink,
-        ) -> Result<(), JobError> {
+        ) -> Result<ExecutionOutcome, JobError> {
             let job_id = execution.job.id;
             self.starts
                 .lock()
@@ -686,7 +732,7 @@ mod tests {
                     details: None,
                 });
             }
-            Ok(())
+            Ok(ExecutionOutcome::default())
         }
     }
 
@@ -701,7 +747,7 @@ mod tests {
             execution: JobExecution,
             cancellation: CancellationToken,
             _emit: super::EventSink,
-        ) -> Result<(), JobError> {
+        ) -> Result<ExecutionOutcome, JobError> {
             let commit = cancellation.begin_commit().expect("commit should begin");
             self.started
                 .lock()
@@ -712,7 +758,26 @@ mod tests {
                 .expect("test receiver should be alive");
             self.gate.wait(&CancellationToken::new());
             commit.finish(true);
-            Ok(())
+            Ok(ExecutionOutcome::default())
+        }
+    }
+
+    struct WarningExecutor;
+
+    impl JobExecutor for WarningExecutor {
+        fn execute(
+            &self,
+            _execution: JobExecution,
+            _cancellation: CancellationToken,
+            _emit: super::EventSink,
+        ) -> Result<ExecutionOutcome, JobError> {
+            Ok(ExecutionOutcome {
+                cleanup_warning: Some(JobError {
+                    code: "temp_cleanup_failed".to_owned(),
+                    message: "temporary cleanup failed after publication".to_owned(),
+                    details: Some("test warning".to_owned()),
+                }),
+            })
         }
     }
 
@@ -1016,6 +1081,79 @@ mod tests {
         assert!(matches!(
             scheduler.snapshot().jobs[0].state,
             JobState::Cancelled { .. }
+        ));
+    }
+
+    #[test]
+    fn failed_destination_reservation_can_be_reused_by_a_new_job() {
+        let executor = RecordingExecutor::fail_first();
+        let scheduler = scheduler(executor, 1);
+        scheduler
+            .enqueue(execution("failed-owner"))
+            .expect("first job should enqueue");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+        assert!(matches!(
+            scheduler.snapshot().jobs[0].state,
+            JobState::Failed { .. }
+        ));
+
+        let mut replacement = execution("replacement");
+        replacement.plan.output_path = PathBuf::from("/output/failed-owner.flac");
+        scheduler
+            .enqueue(replacement)
+            .expect("failed job destination should be reusable");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+        assert!(matches!(
+            scheduler.snapshot().jobs[1].state,
+            JobState::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn cancelled_destination_reservation_can_be_reused_by_a_new_job() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let gate = Arc::new(Gate::new());
+        let executor = RecordingExecutor::blocking(started_tx, Arc::clone(&gate));
+        let scheduler = scheduler(executor, 1);
+        scheduler
+            .enqueue(execution("cancelled-owner"))
+            .expect("first job should enqueue");
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first job should start");
+        scheduler
+            .cancel("cancelled-owner")
+            .expect("running job should cancel");
+        gate.release();
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+
+        let mut replacement = execution("replacement-after-cancel");
+        replacement.plan.output_path = PathBuf::from("/output/cancelled-owner.flac");
+        scheduler
+            .enqueue(replacement)
+            .expect("cancelled job destination should be reusable");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+        assert!(matches!(
+            scheduler.snapshot().jobs[1].state,
+            JobState::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn completed_job_retains_cleanup_warning_metadata() {
+        let scheduler = Scheduler::with_default_concurrency(Arc::new(WarningExecutor));
+        scheduler
+            .enqueue(execution("warning"))
+            .expect("job should enqueue");
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+
+        let state = &scheduler.snapshot().jobs[0].state;
+        assert!(matches!(
+            state,
+            JobState::Completed {
+                warning: Some(JobError { code, .. }),
+                ..
+            } if code == "temp_cleanup_failed"
         ));
     }
 

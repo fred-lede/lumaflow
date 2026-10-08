@@ -39,6 +39,8 @@ pub enum JobState {
         label: String,
         #[serde(rename = "outputPath")]
         output_path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warning: Option<JobError>,
     },
     #[serde(rename = "cancelled")]
     Cancelled { label: String },
@@ -212,6 +214,7 @@ mod tests {
         let state = JobState::Completed {
             label: "Completed".to_owned(),
             output_path: "/output/file.flac".to_owned(),
+            warning: None,
         };
 
         assert_eq!(
