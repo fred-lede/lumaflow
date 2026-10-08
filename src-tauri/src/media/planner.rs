@@ -205,7 +205,8 @@ mod tests {
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/voice.wav", "-map", "0:0", "-c:a", "flac", "/output/voice.flac"
+                "-i", "/input/voice.wav", "-map", "0:0", "-vn", "-c:a", "flac",
+                "/output/voice.flac"
             ]
         );
     }
@@ -222,7 +223,8 @@ mod tests {
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/movie.mp4", "-map", "0:1", "-c:a", "libmp3lame", "/output/movie.mp3"
+                "-i", "/input/movie.mp4", "-map", "0:1", "-vn", "-c:a", "libmp3lame",
+                "/output/movie.mp3"
             ]
         );
     }
@@ -342,9 +344,88 @@ mod tests {
             .all(|argument| !argument.to_string_lossy().contains(" ")));
     }
 
+    #[test]
+    fn rejects_output_path_collision_with_source_path() {
+        let mut media = mp4_media();
+        media.path = "/output/movie.mp4".to_owned();
+
+        let error = plan_conversion(&media, &settings(OutputFormat::Mp4))
+            .expect_err("planner must not overwrite the source");
+
+        assert_eq!(error.code, "path_collision");
+    }
+
+    #[test]
+    fn preserves_spaces_and_special_characters_in_paths() {
+        let mut media = mp4_media();
+        media.path = "/input/My Clip [final] & cut.mp4".to_owned();
+        media.file_name = "My Clip [final] & cut.mp4".to_owned();
+        let mut output = settings(OutputFormat::Mp3);
+        output.output_directory = "/output folder".to_owned();
+
+        let plan = plan_conversion(&media, &output).expect("special-character paths are valid");
+        let arguments = args(&plan);
+
+        assert_eq!(plan.output_path, PathBuf::from("/output folder/My Clip [final] & cut.mp3"));
+        assert_eq!(arguments[1], "/input/My Clip [final] & cut.mp4");
+        assert_eq!(arguments.last(), Some(&"/output folder/My Clip [final] & cut.mp3".to_owned()));
+    }
+
+    #[test]
+    fn mp4_to_mp3_selects_only_audio_and_never_emits_video_filters() {
+        let mut output = settings(OutputFormat::Mp3);
+        output.sample_rate_hz = Some(44_100);
+        output.channels = Some(1);
+
+        let plan = plan_conversion(&mp4_media(), &output)
+            .expect("audio-only MP3 conversion should be supported");
+        let arguments = args(&plan);
+
+        assert!(arguments.contains(&"0:1".to_owned()));
+        assert!(!arguments.contains(&"0:0".to_owned()));
+        assert!(arguments.contains(&"-vn".to_owned()));
+        assert!(!arguments.contains(&"-vf".to_owned()));
+        assert!(!arguments.contains(&"-c:v".to_owned()));
+    }
+
+    #[test]
+    fn mp4_to_mp3_rejects_video_settings_instead_of_emitting_audio_only_video_filters() {
+        let mut output = settings(OutputFormat::Mp3);
+        output.width = Some(1280);
+
+        let error = plan_conversion(&mp4_media(), &output)
+            .expect_err("video settings are invalid for an MP3 target");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn codec_setting_is_scoped_to_the_target_video_stream() {
+        let mut output = settings(OutputFormat::Mp4);
+        output.codec = Some("libx264".to_owned());
+
+        let plan = plan_conversion(&mp4_media(), &output)
+            .expect("supported MP4 video codec should transcode");
+        let arguments = args(&plan);
+
+        assert!(arguments.windows(2).any(|pair| pair == ["-c:v", "libx264"]));
+        assert!(!arguments.contains(&"-c".to_owned()));
+    }
+
+    #[test]
+    fn audio_codec_is_rejected_for_video_target_instead_of_being_applied_globally() {
+        let mut output = settings(OutputFormat::Mp4);
+        output.codec = Some("aac".to_owned());
+
+        let error = plan_conversion(&mp4_media(), &output)
+            .expect_err("ambiguous audio codec must not be applied to a video target");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
 }
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use crate::domain::job::ProcessingKind;
 use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings};
@@ -364,6 +445,8 @@ pub fn plan_conversion(
     settings: &OutputSettings,
 ) -> Result<ConversionPlan, MediaError> {
     let output_path = output_path(media, settings)?;
+    reject_path_collision(&media.path, &output_path)?;
+    validate_target_settings(media, settings)?;
     let source_container = resolve_container_name(&media.container, &media.path)?;
     let output_format = &settings.format;
     let mode = match output_format {
@@ -475,6 +558,94 @@ fn output_path(media: &MediaInfo, settings: &OutputSettings) -> Result<PathBuf, 
         .ok_or_else(|| MediaError::new("invalid_output_path", "Media file name has no valid stem"))?;
     Ok(PathBuf::from(&settings.output_directory)
         .join(format!("{stem}.{}", settings.format.extension())))
+}
+
+fn reject_path_collision(source_path: &str, output_path: &Path) -> Result<(), MediaError> {
+    let source_path = Path::new(source_path);
+    let paths_match = match (
+        std::fs::canonicalize(source_path),
+        std::fs::canonicalize(output_path),
+    ) {
+        (Ok(source), Ok(output)) => source == output,
+        _ => lexically_normalize(source_path) == lexically_normalize(output_path),
+    };
+
+    if paths_match {
+        Err(MediaError::new(
+            "path_collision",
+            "The output path must not overwrite the source path",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    normalized
+}
+
+fn validate_target_settings(
+    media: &MediaInfo,
+    settings: &OutputSettings,
+) -> Result<(), MediaError> {
+    let has_video_settings = settings.width.is_some()
+        || settings.height.is_some()
+        || settings.frame_rate.is_some();
+
+    if has_video_settings && settings.format.is_audio_only() {
+        return Err(MediaError::new(
+            "unsupported_conversion",
+            "Video settings cannot be applied to an audio-only output",
+        ));
+    }
+
+    if has_video_settings && media.video_streams.is_empty() && !settings.format.is_audio_only() {
+        return Err(MediaError::new(
+            "unsupported_conversion",
+            "Video settings require a source video stream",
+        ));
+    }
+
+    if let Some(codec) = &settings.codec {
+        if !is_supported_target_codec(&settings.format, codec) {
+            return Err(MediaError::new(
+                "unsupported_conversion",
+                format!(
+                    "Codec '{codec}' is not a proven codec mapping for {}",
+                    settings.format.display_name()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_supported_target_codec(format: &OutputFormat, codec: &str) -> bool {
+    match format {
+        OutputFormat::Mp4 | OutputFormat::Mov | OutputFormat::Mkv => {
+            matches!(codec, "h264" | "libx264" | "hevc" | "libx265")
+        }
+        OutputFormat::Mp3 => matches!(codec, "mp3" | "libmp3lame"),
+        OutputFormat::M4a => codec == "aac",
+        OutputFormat::Wav => codec.starts_with("pcm_"),
+        OutputFormat::Flac => codec == "flac",
+        OutputFormat::Webm | OutputFormat::Avi | OutputFormat::Ogg => false,
+    }
 }
 
 fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {

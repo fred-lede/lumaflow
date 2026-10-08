@@ -91,21 +91,27 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
             "video" => video_streams.push(VideoStreamInfo {
                 codec: required_string(stream, "codec_name")?,
                 stream_index: required_u32(stream, "index")?,
-                width: required_u32(stream, "width")?,
-                height: required_u32(stream, "height")?,
-                frame_rate: required_string(stream, "r_frame_rate")?,
+                width: required_nonzero_u32(stream, "width")?,
+                height: required_nonzero_u32(stream, "height")?,
+                frame_rate: required_frame_rate(stream, "r_frame_rate")?,
             }),
             "audio" => audio_streams.push(AudioStreamInfo {
                 codec: required_string(stream, "codec_name")?,
                 stream_index: required_u32(stream, "index")?,
-                sample_rate_hz: required_u32(stream, "sample_rate")?,
-                channels: required_u16(stream, "channels")?,
+                sample_rate_hz: required_sample_rate(stream, "sample_rate")?,
+                channels: required_nonzero_u16(stream, "channels")?,
             }),
             "subtitle" => subtitle_streams.push(SubtitleStreamInfo {
                 codec: required_string(stream, "codec_name")?,
                 stream_index: required_u32(stream, "index")?,
             }),
-            _ => {}
+            _ => {
+                return Err(MediaError::with_details(
+                    "unsupported_streams",
+                    format!("FFprobe returned unsupported {stream_type} stream"),
+                    format!("stream_type={stream_type}"),
+                ));
+            }
         }
     }
 
@@ -175,6 +181,60 @@ fn required_u16(document: &Value, field: &str) -> Result<u16, MediaError> {
     parse_integer(document, field)
 }
 
+fn required_nonzero_u32(document: &Value, field: &str) -> Result<u32, MediaError> {
+    let value = required_u32(document, field)?;
+    if value == 0 {
+        Err(invalid_field(field))
+    } else {
+        Ok(value)
+    }
+}
+
+fn required_nonzero_u16(document: &Value, field: &str) -> Result<u16, MediaError> {
+    let value = required_u16(document, field)?;
+    if value == 0 || value > 256 {
+        Err(invalid_field(field))
+    } else {
+        Ok(value)
+    }
+}
+
+fn required_sample_rate(document: &Value, field: &str) -> Result<u32, MediaError> {
+    let value = required_u32(document, field)?;
+    if value == 0 || value > 768_000 {
+        Err(invalid_field(field))
+    } else {
+        Ok(value)
+    }
+}
+
+fn required_frame_rate(document: &Value, field: &str) -> Result<String, MediaError> {
+    let value = required_string(document, field)?;
+    let rate = if let Some((numerator, denominator)) = value.split_once('/') {
+        if denominator.contains('/') {
+            None
+        } else {
+            let numerator = numerator.parse::<f64>().ok();
+            let denominator = denominator.parse::<f64>().ok();
+            match (numerator, denominator) {
+                (Some(numerator), Some(denominator))
+                    if numerator > 0.0 && denominator > 0.0 =>
+                {
+                    Some(numerator / denominator)
+                }
+                _ => None,
+            }
+        }
+    } else {
+        value.parse::<f64>().ok()
+    };
+
+    match rate {
+        Some(rate) if rate.is_finite() && rate > 0.0 && rate <= 1_000.0 => Ok(value),
+        _ => Err(invalid_field("frame rate")),
+    }
+}
+
 fn parse_integer<T>(document: &Value, field: &str) -> Result<T, MediaError>
 where
     T: std::str::FromStr,
@@ -227,6 +287,17 @@ mod tests {
       "streams": [
         {"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"r_frame_rate":"30000/1001"},
         {"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2}
+      ]
+    }
+    "#;
+
+    const UNKNOWN_STREAM_JSON: &str = r#"
+    {
+      "format": {"format_name":"mp4","duration":"12.500000","size":"4096"},
+      "streams": [
+        {"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"r_frame_rate":"30000/1001"},
+        {"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2},
+        {"index":2,"codec_type":"data","codec_name":"bin_data"}
       ]
     }
     "#;
@@ -375,6 +446,80 @@ mod tests {
             .expect("explicit container metadata should probe");
 
             assert_eq!(actual.container, format_name);
+        }
+    }
+
+    #[test]
+    fn disambiguates_matroska_webm_composite_using_mkv_and_webm_extensions() {
+        let json = REAL_STYLE_MP4_JSON.replace(
+            "\"mov,mp4,m4a,3gp,3g2,mj2\"",
+            "\"matroska,webm\"",
+        );
+
+        let mkv = probe_media(
+            &FakeRunner::successful(&json),
+            "/input/movie.mkv",
+        )
+        .expect("MKV metadata should probe");
+        let webm = probe_media(
+            &FakeRunner::successful(&json),
+            "/input/movie.webm",
+        )
+        .expect("WebM metadata should probe");
+
+        assert_eq!(mkv.container, "matroska");
+        assert_eq!(webm.container, "webm");
+    }
+
+    #[test]
+    fn rejects_unknown_data_attachment_and_stream_types_instead_of_dropping_them() {
+        for stream_type in ["data", "attachment", "unknown"] {
+            let json = UNKNOWN_STREAM_JSON.replace("\"data\"", &format!("\"{stream_type}\""));
+            let error = probe_media(
+                &FakeRunner::successful(&json),
+                "/input/movie.mp4",
+            )
+            .expect_err("unsupported stream types must not be dropped");
+
+            assert_eq!(error.code, "unsupported_streams");
+            assert!(error.message.contains(stream_type));
+        }
+    }
+
+    #[test]
+    fn rejects_zero_dimensions_channels_and_sample_rates() {
+        let invalid_dimensions = MP4_JSON.replace("\"width\":1920", "\"width\":0");
+        let invalid_channels = WAV_JSON.replace("\"channels\":2", "\"channels\":0");
+        let invalid_sample_rate = WAV_JSON.replace("\"sample_rate\":44100", "\"sample_rate\":0");
+
+        for (json, field) in [
+            (invalid_dimensions, "width"),
+            (invalid_channels, "channels"),
+            (invalid_sample_rate, "sample_rate"),
+        ] {
+            let error = probe_media(
+                &FakeRunner::successful(&json),
+                "/input/media",
+            )
+            .expect_err("zero metadata values must be rejected");
+
+            assert_eq!(error.code, "probe_invalid_field");
+            assert!(error.message.contains(field));
+        }
+    }
+
+    #[test]
+    fn rejects_zero_and_non_numeric_frame_rates() {
+        for frame_rate in ["0/0", "0", "not-a-rate", "-30/-1", "1001/1"] {
+            let json = MP4_JSON.replace("\"30000/1001\"", &format!("\"{frame_rate}\""));
+            let error = probe_media(
+                &FakeRunner::successful(&json),
+                "/input/movie.mp4",
+            )
+            .expect_err("invalid frame rates must be rejected");
+
+            assert_eq!(error.code, "probe_invalid_field");
+            assert!(error.message.contains("frame rate"));
         }
     }
 

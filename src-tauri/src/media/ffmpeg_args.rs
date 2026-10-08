@@ -38,15 +38,17 @@ pub fn input_and_output_args(
     match mode {
         ArgumentMode::AllStreams => args.extend([OsString::from("-c"), OsString::from("copy")]),
         ArgumentMode::TranscodeAll => {
+            let video_codec = settings.codec.as_deref().unwrap_or("libx264");
             args.extend([
                 OsString::from("-c:v"),
-                OsString::from("libx264"),
+                OsString::from(video_codec),
                 OsString::from("-c:a"),
                 OsString::from("aac"),
             ]);
-            add_transcoding_settings(&mut args, settings);
+            add_transcoding_options(&mut args, settings);
         }
         ArgumentMode::FirstAudio => {
+            args.push(OsString::from("-vn"));
             let default_codec = match settings.format {
                 crate::domain::media::OutputFormat::Flac => "flac",
                 crate::domain::media::OutputFormat::Mp3 => "libmp3lame",
@@ -59,7 +61,7 @@ pub fn input_and_output_args(
                 OsString::from("-c:a"),
                 OsString::from(settings.codec.as_deref().unwrap_or(default_codec)),
             ]);
-            add_transcoding_options(&mut args, settings);
+            add_audio_transcoding_options(&mut args, settings);
         }
     }
 
@@ -72,13 +74,6 @@ pub enum ArgumentMode {
     AllStreams,
     FirstAudio,
     TranscodeAll,
-}
-
-fn add_transcoding_settings(args: &mut Vec<OsString>, settings: &OutputSettings) {
-    if let Some(codec) = &settings.codec {
-        args.extend([OsString::from("-c"), OsString::from(codec)]);
-    }
-    add_transcoding_options(args, settings);
 }
 
 fn add_transcoding_options(args: &mut Vec<OsString>, settings: &OutputSettings) {
@@ -101,6 +96,10 @@ fn add_transcoding_options(args: &mut Vec<OsString>, settings: &OutputSettings) 
     if let Some(frame_rate) = &settings.frame_rate {
         args.extend([OsString::from("-r"), OsString::from(frame_rate)]);
     }
+    add_audio_transcoding_options(args, settings);
+}
+
+fn add_audio_transcoding_options(args: &mut Vec<OsString>, settings: &OutputSettings) {
     if let Some(sample_rate) = settings.sample_rate_hz {
         args.extend([
             OsString::from("-ar"),

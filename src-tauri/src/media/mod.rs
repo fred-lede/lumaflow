@@ -81,6 +81,27 @@ pub(crate) fn resolve_container_name(
         };
     }
 
+    if names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("matroska"))
+        && names.iter().any(|name| name.eq_ignore_ascii_case("webm"))
+    {
+        let extension = Path::new(source_path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+
+        return match extension.as_deref() {
+            Some("mkv") => Ok("matroska".to_owned()),
+            Some("webm") => Ok("webm".to_owned()),
+            _ => Err(MediaError::with_details(
+                "unknown_container",
+                "The composite Matroska/WebM container cannot be disambiguated safely",
+                container,
+            )),
+        };
+    }
+
     Err(MediaError::with_details(
         "unknown_container",
         "The composite source container is not supported safely",
