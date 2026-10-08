@@ -44,7 +44,202 @@ jobs:
         run: npm run test -- --run
 
       - name: Test Rust backend
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        # The real-media integration target is asset-gated and runs in the
+        # explicit release/E2E workflow with the pinned binaries.
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Check deterministic fixture contract
+        run: npm run test -- --run tests/fixtures/contract.spec.ts
+
+      - name: Check source third-party notice
+        run: node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only
 
       - name: Build Tauri package smoke test
         run: npm exec -- tauri build --debug --bundles deb
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-14
+            bundle: dmg
+            archive_url: https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/darwin_arm64.zip
+            archive_file: darwin_arm64.zip
+            archive_sha256: 842ba18551e73f1f7f0e92408b210503fc9a13b88182db2014fd553bce990895
+          - target: darwin-x64
+            runner: macos-13
+            bundle: dmg
+            archive_url: https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/darwin_x64.zip
+            archive_file: darwin_x64.zip
+            archive_sha256: 60839c7196d19512e6b1fc9f9f46897a39438e408f4c95c28ebe178d080c038e
+          - target: windows-x64
+            runner: windows-2022
+            bundle: nsis
+            archive_url: https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build.zip
+            archive_file: ffmpeg-8.1.2-full_build.zip
+            archive_sha256: b8cdefab5f50590a076c27c2b56b0294a0e6154faded28ba1ba05ebc4f801f57
+          - target: linux-x64
+            runner: ubuntu-22.04
+            bundle: appimage
+            archive_url: https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/linux_x64.zip
+            archive_file: linux_x64.zip
+            archive_sha256: 150f20cfa659754115b74c2aa32f0e1aa150d08a14191156875c8efeb5713b29
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            unzip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Download pinned FFmpeg archive on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "src-tauri/binaries/${{ matrix.target }}"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "${{ matrix.archive_url }}" \
+            --output "src-tauri/binaries/${{ matrix.archive_file }}"
+          printf '%s  %s\n' "${{ matrix.archive_sha256 }}" "src-tauri/binaries/${{ matrix.archive_file }}" | shasum -a 256 -c -
+
+      - name: Download pinned FFmpeg archive on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "src-tauri/binaries/${{ matrix.target }}" | Out-Null
+          Invoke-WebRequest -Uri "${{ matrix.archive_url }}" -OutFile "src-tauri/binaries/${{ matrix.archive_file }}"
+          if ((Get-FileHash "src-tauri/binaries/${{ matrix.archive_file }}" -Algorithm SHA256).Hash.ToLowerInvariant() -ne "${{ matrix.archive_sha256 }}") { throw "FFmpeg archive SHA-256 mismatch" }
+
+      - name: Extract pinned FFmpeg archive on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          work="${RUNNER_TEMP}/lumaflow-ffmpeg"
+          rm -rf "$work"
+          mkdir -p "$work"
+          unzip -q "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}" -d "$work"
+          ffmpeg_path="$(find "$work" -type f -name ffmpeg -print -quit)"
+          ffprobe_path="$(find "$work" -type f -name ffprobe -print -quit)"
+          test -n "$ffmpeg_path" && test -n "$ffprobe_path"
+          cp "$ffmpeg_path" "src-tauri/binaries/${{ matrix.target }}/ffmpeg"
+          cp "$ffprobe_path" "src-tauri/binaries/${{ matrix.target }}/ffprobe"
+          chmod 755 "src-tauri/binaries/${{ matrix.target }}/ffmpeg" "src-tauri/binaries/${{ matrix.target }}/ffprobe"
+          mkdir -p "src-tauri/binaries/${{ matrix.target }}/licenses"
+          find "$work" -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'readme*' \) -exec cp {} "src-tauri/binaries/${{ matrix.target }}/licenses/ \;
+          test -n "$(find "src-tauri/binaries/${{ matrix.target }}/licenses" -type f -print -quit)"
+          "src-tauri/binaries/${{ matrix.target }}/ffmpeg" -buildconf > "src-tauri/binaries/${{ matrix.target }}/ffmpeg-buildconf.txt"
+
+      - name: Extract pinned FFmpeg archive on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "lumaflow-ffmpeg"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $work
+          Expand-Archive -Path "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}" -DestinationPath $work
+          $ffmpeg = Get-ChildItem -Path $work -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobe = Get-ChildItem -Path $work -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if ($null -eq $ffmpeg -or $null -eq $ffprobe) { throw "FFmpeg or FFprobe executable is absent from the release archive" }
+          Copy-Item $ffmpeg.FullName "src-tauri/binaries/${{ matrix.target }}/ffmpeg.exe"
+          Copy-Item $ffprobe.FullName "src-tauri/binaries/${{ matrix.target }}/ffprobe.exe"
+          New-Item -ItemType Directory -Force -Path "src-tauri/binaries/${{ matrix.target }}/licenses" | Out-Null
+          Get-ChildItem -Path $work -Recurse -File | Where-Object { $_.Name -match '^(LICENSE|COPYING|README)' } | Copy-Item -Destination "src-tauri/binaries/${{ matrix.target }}/licenses" -Force
+          if (-not (Get-ChildItem "src-tauri/binaries/${{ matrix.target }}/licenses" -File)) { throw "License files are absent from the release archive" }
+          & "src-tauri/binaries/${{ matrix.target }}/ffmpeg.exe" -buildconf | Out-File -Encoding utf8 "src-tauri/binaries/${{ matrix.target }}/ffmpeg-buildconf.txt"
+
+      - name: Verify FFmpeg and FFprobe assets
+        shell: bash
+        run: |
+          node --experimental-strip-types scripts/verify-ffmpeg-assets.ts \
+            --target "${{ matrix.target }}" \
+            --asset-dir "src-tauri/binaries/${{ matrix.target }}" \
+            --archive "src-tauri/binaries/${{ matrix.archive_file }}"
+
+      - name: Generate and verify target third-party notice
+        shell: bash
+        run: |
+          node --experimental-strip-types scripts/check-third-party-licenses.ts \
+            --target "${{ matrix.target }}" \
+            --asset-dir "src-tauri/binaries/${{ matrix.target }}" \
+            --archive "src-tauri/binaries/${{ matrix.archive_file }}" \
+            --write
+          node --experimental-strip-types scripts/check-third-party-licenses.ts \
+            --target "${{ matrix.target }}" \
+            --asset-dir "src-tauri/binaries/${{ matrix.target }}" \
+            --archive "src-tauri/binaries/${{ matrix.archive_file }}"
+
+      - name: Remove source archive before packaging
+        shell: bash
+        run: rm "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}"
+
+      - name: Build release bundle
+        shell: bash
+        run: npm exec -- tauri build --bundles "${{ matrix.bundle }}"
+
+      - name: Write release checksums on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          find src-tauri/target/release/bundle -type f -print0 | sort -z | xargs -0 shasum -a 256 > "checksums-${{ matrix.target }}.sha256"
+
+      - name: Write release checksums on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse -File |
+            Sort-Object FullName |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.FullName)"
+            } | Set-Content -Encoding utf8 "checksums-${{ matrix.target }}.sha256"
+
+      - name: Upload release bundle and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumaflow-${{ matrix.target }}
+          path: |
+            src-tauri/target/release/bundle/**
+            checksums-${{ matrix.target }}.sha256
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Publish bundles and checksums
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/**/**

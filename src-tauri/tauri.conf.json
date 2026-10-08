@@ -28,7 +28,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "icon": ["icons/icon.png"]
+    "targets": ["app", "dmg", "msi", "nsis", "appimage"],
+    "icon": ["icons/icon.png"],
+    "resources": ["binaries", "../THIRD_PARTY_NOTICES.md"]
   }
 }

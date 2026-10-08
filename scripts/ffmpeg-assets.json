@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "ffmpegVersion": "8.1.2",
+  "targets": {
+    "darwin-arm64": {
+      "provider": "ffmpeg-bins2 / zackees",
+      "sourceUrl": "https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/darwin_arm64.zip",
+      "archive": {
+        "file": "darwin_arm64.zip",
+        "sha256": "842ba18551e73f1f7f0e92408b210503fc9a13b88182db2014fd553bce990895"
+      },
+      "ffmpeg": { "path": "ffmpeg" },
+      "ffprobe": { "path": "ffprobe" }
+    },
+    "darwin-x64": {
+      "provider": "ffmpeg-bins2 / zackees",
+      "sourceUrl": "https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/darwin_x64.zip",
+      "archive": {
+        "file": "darwin_x64.zip",
+        "sha256": "60839c7196d19512e6b1fc9f9f46897a39438e408f4c95c28ebe178d080c038e"
+      },
+      "ffmpeg": { "path": "ffmpeg" },
+      "ffprobe": { "path": "ffprobe" }
+    },
+    "windows-x64": {
+      "provider": "GyanD codexffmpeg full build",
+      "sourceUrl": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build.zip",
+      "archive": {
+        "file": "ffmpeg-8.1.2-full_build.zip",
+        "sha256": "b8cdefab5f50590a076c27c2b56b0294a0e6154faded28ba1ba05ebc4f801f57"
+      },
+      "ffmpeg": { "path": "ffmpeg.exe" },
+      "ffprobe": { "path": "ffprobe.exe" }
+    },
+    "linux-x64": {
+      "provider": "ffmpeg-bins2 / zackees",
+      "sourceUrl": "https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/linux_x64.zip",
+      "archive": {
+        "file": "linux_x64.zip",
+        "sha256": "150f20cfa659754115b74c2aa32f0e1aa150d08a14191156875c8efeb5713b29"
+      },
+      "ffmpeg": { "path": "ffmpeg" },
+      "ffprobe": { "path": "ffprobe" }
+    }
+  }
+}
