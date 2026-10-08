@@ -206,7 +206,7 @@ mod tests {
             args(&plan),
             vec![
                 "-i", "/input/voice.wav", "-map", "0:0", "-vn", "-c:a", "flac",
-                "/output/voice.flac"
+                "-compression_level", "5", "/output/voice.flac"
             ]
         );
     }
@@ -224,7 +224,7 @@ mod tests {
             args(&plan),
             vec![
                 "-i", "/input/movie.mp4", "-map", "0:1", "-vn", "-c:a", "libmp3lame",
-                "/output/movie.mp3"
+                "-q:a", "0", "/output/movie.mp3"
             ]
         );
     }
@@ -423,12 +423,193 @@ mod tests {
         assert_eq!(error.code, "unsupported_conversion");
     }
 
+    #[test]
+    fn rejects_invalid_target_setting_values_before_building_arguments() {
+        let invalid_settings = [
+            (
+                "width",
+                OutputSettings {
+                    width: Some(0),
+                    ..settings(OutputFormat::Mp4)
+                },
+            ),
+            (
+                "height",
+                OutputSettings {
+                    height: Some(16_385),
+                    ..settings(OutputFormat::Mp4)
+                },
+            ),
+            (
+                "sample rate",
+                OutputSettings {
+                    sample_rate_hz: Some(0),
+                    ..settings(OutputFormat::Mp3)
+                },
+            ),
+            (
+                "channels",
+                OutputSettings {
+                    channels: Some(257),
+                    ..settings(OutputFormat::Mp3)
+                },
+            ),
+            (
+                "bitrate",
+                OutputSettings {
+                    bitrate_kbps: Some(1_000_001),
+                    ..settings(OutputFormat::Mp3)
+                },
+            ),
+            (
+                "frame rate",
+                OutputSettings {
+                    frame_rate: Some("30/-1".to_owned()),
+                    ..settings(OutputFormat::Mp4)
+                },
+            ),
+        ];
+
+        for (field, output) in invalid_settings {
+            let error = plan_conversion(&mp4_media(), &output)
+                .expect_err("invalid target settings must fail before argument construction");
+
+            assert_eq!(error.code, "invalid_settings", "invalid {field} should be rejected");
+        }
+    }
+
+    #[test]
+    fn supported_video_quality_presets_generate_distinct_explicit_arguments() {
+        let mut plans = Vec::new();
+        for quality in [
+            QualityPreset::Original,
+            QualityPreset::High,
+            QualityPreset::Balanced,
+            QualityPreset::Small,
+        ] {
+            let mut output = settings(OutputFormat::Mp4);
+            output.quality = quality;
+            output.width = Some(1280);
+            let plan = plan_conversion(&mp4_media(), &output)
+                .expect("video quality preset should be supported");
+            let arguments = args(&plan);
+
+            assert!(arguments.contains(&"-crf".to_owned()));
+            plans.push(arguments);
+        }
+
+        assert!(plans.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn supported_audio_quality_presets_generate_distinct_explicit_arguments() {
+        let mut plans = Vec::new();
+        for quality in [
+            QualityPreset::Original,
+            QualityPreset::High,
+            QualityPreset::Balanced,
+            QualityPreset::Small,
+        ] {
+            let mut output = settings(OutputFormat::Mp3);
+            output.quality = quality;
+            let plan = plan_conversion(&mp4_media(), &output)
+                .expect("MP3 quality preset should be supported");
+            let arguments = args(&plan);
+
+            assert!(
+                arguments.contains(&"-q:a".to_owned())
+                    || arguments.contains(&"-b:a".to_owned())
+            );
+            plans.push(arguments);
+        }
+
+        assert!(plans.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn unsupported_flac_quality_preset_returns_structured_settings_error() {
+        let mut output = settings(OutputFormat::Flac);
+        output.quality = QualityPreset::High;
+
+        let error = plan_conversion(&wav_media(), &output)
+            .expect_err("FLAC quality profile only supports the original lossless preset");
+
+        assert_eq!(error.code, "unsupported_settings");
+    }
+
+    #[test]
+    fn m4a_remux_rejects_video_streams() {
+        let mut media = mp4_media();
+        media.path = "/input/video.m4a".to_owned();
+        media.file_name = "video.m4a".to_owned();
+        media.container = "m4a".to_owned();
+
+        let error = plan_conversion(&media, &settings(OutputFormat::M4a))
+            .expect_err("M4A must not remux video streams");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn mkv_remux_rejects_unknown_stream_codecs() {
+        let mut media = mp4_media();
+        media.container = "matroska".to_owned();
+        media.video_streams[0].codec = "unknown-video".to_owned();
+
+        let error = plan_conversion(&media, &settings(OutputFormat::Mkv))
+            .expect_err("MKV remux must require known-safe codecs");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn mkv_remux_rejects_unknown_audio_even_with_known_video() {
+        let mut media = mp4_media();
+        media.container = "matroska".to_owned();
+        media.audio_streams[0].codec = "unknown-audio".to_owned();
+
+        let error = plan_conversion(&media, &settings(OutputFormat::Mkv))
+            .expect_err("MKV remux must not drop an unknown audio stream");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn known_mkv_codecs_can_remux_without_wildcard_compatibility() {
+        let mut media = mp4_media();
+        media.container = "matroska".to_owned();
+
+        let plan = plan_conversion(&media, &settings(OutputFormat::Mkv))
+            .expect("known-safe MKV codecs should remux");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::LosslessRemux { .. }
+        ));
+    }
+
+    #[test]
+    fn valid_webm_codecs_can_remux_without_becoming_wildcard_compatible() {
+        let mut media = mp4_media();
+        media.container = "webm".to_owned();
+        media.video_streams[0].codec = "vp9".to_owned();
+        media.audio_streams[0].codec = "opus".to_owned();
+
+        let plan = plan_conversion(&media, &settings(OutputFormat::Webm))
+            .expect("known-safe WebM codecs should remux");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::LosslessRemux { .. }
+        ));
+    }
+
 }
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use crate::domain::job::ProcessingKind;
-use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings};
+use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
 
 use super::ffmpeg_args::{input_and_output_args, ArgumentMode};
 use super::{resolve_container_name, MediaError};
@@ -602,6 +783,9 @@ fn validate_target_settings(
     media: &MediaInfo,
     settings: &OutputSettings,
 ) -> Result<(), MediaError> {
+    validate_numeric_settings(settings)?;
+    validate_quality_settings(settings)?;
+
     let has_video_settings = settings.width.is_some()
         || settings.height.is_some()
         || settings.frame_rate.is_some();
@@ -635,6 +819,96 @@ fn validate_target_settings(
     Ok(())
 }
 
+fn validate_numeric_settings(settings: &OutputSettings) -> Result<(), MediaError> {
+    const MAX_DIMENSION: u32 = 16_384;
+    const MAX_SAMPLE_RATE_HZ: u32 = 768_000;
+    const MAX_CHANNELS: u16 = 256;
+    const MAX_BITRATE_KBPS: u32 = 1_000_000;
+    const MAX_FRAME_RATE: f64 = 1_000.0;
+
+    if let Some(width) = settings.width {
+        if !(1..=MAX_DIMENSION).contains(&width) {
+            return Err(invalid_setting("width must be between 1 and 16384"));
+        }
+    }
+    if let Some(height) = settings.height {
+        if !(1..=MAX_DIMENSION).contains(&height) {
+            return Err(invalid_setting("height must be between 1 and 16384"));
+        }
+    }
+    if let Some(sample_rate) = settings.sample_rate_hz {
+        if !(1..=MAX_SAMPLE_RATE_HZ).contains(&sample_rate) {
+            return Err(invalid_setting("sample rate must be between 1 and 768000 Hz"));
+        }
+    }
+    if let Some(channels) = settings.channels {
+        if !(1..=MAX_CHANNELS).contains(&channels) {
+            return Err(invalid_setting("channels must be between 1 and 256"));
+        }
+    }
+    if let Some(bitrate) = settings.bitrate_kbps {
+        if !(1..=MAX_BITRATE_KBPS).contains(&bitrate) {
+            return Err(invalid_setting("bitrate must be between 1 and 1000000 kbps"));
+        }
+    }
+    if let Some(frame_rate) = &settings.frame_rate {
+        let rate = if let Some((numerator, denominator)) = frame_rate.split_once('/') {
+            if denominator.contains('/') {
+                None
+            } else {
+                match (numerator.parse::<f64>().ok(), denominator.parse::<f64>().ok()) {
+                    (Some(numerator), Some(denominator))
+                        if numerator > 0.0 && denominator > 0.0 => Some(numerator / denominator),
+                    _ => None,
+                }
+            }
+        } else {
+            frame_rate.parse::<f64>().ok()
+        };
+
+        if !matches!(
+            rate,
+            Some(rate) if rate.is_finite() && rate > 0.0 && rate <= MAX_FRAME_RATE
+        ) {
+            return Err(invalid_setting(
+                "frame rate must be a positive ratio or number up to 1000",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_quality_settings(settings: &OutputSettings) -> Result<(), MediaError> {
+    let supported = match settings.format {
+        OutputFormat::Mp4
+        | OutputFormat::Mov
+        | OutputFormat::Mkv
+        | OutputFormat::Mp3
+        | OutputFormat::M4a => true,
+        OutputFormat::Flac | OutputFormat::Wav => settings.quality == QualityPreset::Original,
+        OutputFormat::Webm | OutputFormat::Avi | OutputFormat::Ogg => {
+            settings.quality == QualityPreset::Original
+        }
+    };
+
+    if supported {
+        Ok(())
+    } else {
+        Err(MediaError::new(
+            "unsupported_settings",
+            format!(
+                "Quality preset is not supported for {}",
+                settings.format.display_name()
+            ),
+        ))
+    }
+}
+
+fn invalid_setting(message: impl Into<String>) -> MediaError {
+    MediaError::new("invalid_settings", message)
+}
+
 fn is_supported_target_codec(format: &OutputFormat, codec: &str) -> bool {
     match format {
         OutputFormat::Mp4 | OutputFormat::Mov | OutputFormat::Mkv => {
@@ -650,18 +924,58 @@ fn is_supported_target_codec(format: &OutputFormat, codec: &str) -> bool {
 
 fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
     match format {
-        OutputFormat::Mp4 | OutputFormat::Mov | OutputFormat::M4a => {
-            media.video_streams.iter().all(|stream| stream.codec == "h264")
+        OutputFormat::Mp4 | OutputFormat::Mov => {
+            !media.video_streams.is_empty()
+                && media.video_streams.iter().all(|stream| stream.codec == "h264")
+                && !media.audio_streams.is_empty()
                 && media
                     .audio_streams
                     .iter()
                     .all(|stream| stream.codec == "aac" || stream.codec == "mp3")
                 && media.subtitle_streams.is_empty()
         }
-        OutputFormat::Mkv => true,
+        OutputFormat::M4a => {
+            media.video_streams.is_empty()
+                && !media.audio_streams.is_empty()
+                && media
+                    .audio_streams
+                    .iter()
+                    .all(|stream| stream.codec == "aac" || stream.codec == "mp3")
+                && media.subtitle_streams.is_empty()
+        }
+        OutputFormat::Mkv => {
+            (!media.video_streams.is_empty()
+                || !media.audio_streams.is_empty()
+                || !media.subtitle_streams.is_empty())
+                && media
+                    .video_streams
+                    .iter()
+                    .all(|stream| is_mkv_video_codec(&stream.codec))
+                && media
+                    .audio_streams
+                    .iter()
+                    .all(|stream| is_mkv_audio_codec(&stream.codec))
+                && media
+                    .subtitle_streams
+                    .iter()
+                    .all(|stream| is_known_subtitle_codec(&stream.codec))
+        }
+        OutputFormat::Webm => {
+            (!media.video_streams.is_empty() || !media.audio_streams.is_empty())
+                && media.subtitle_streams.is_empty()
+                && media
+                    .video_streams
+                    .iter()
+                    .all(|stream| is_webm_video_codec(&stream.codec))
+                && media
+                    .audio_streams
+                    .iter()
+                    .all(|stream| is_webm_audio_codec(&stream.codec))
+        }
         OutputFormat::Wav => {
             media.video_streams.is_empty()
                 && media.subtitle_streams.is_empty()
+                && !media.audio_streams.is_empty()
                 && media
                     .audio_streams
                     .iter()
@@ -670,6 +984,7 @@ fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
         OutputFormat::Flac => {
             media.video_streams.is_empty()
                 && media.subtitle_streams.is_empty()
+                && !media.audio_streams.is_empty()
                 && media.audio_streams.iter().all(|stream| stream.codec == "flac")
         }
         OutputFormat::Mp3 => {
@@ -680,6 +995,32 @@ fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
         }
         _ => false,
     }
+}
+
+fn is_mkv_video_codec(codec: &str) -> bool {
+    matches!(codec, "h264" | "hevc" | "vp8" | "vp9" | "av1")
+}
+
+fn is_mkv_audio_codec(codec: &str) -> bool {
+    matches!(
+        codec,
+        "aac" | "mp3" | "opus" | "vorbis" | "flac" | "ac3" | "eac3"
+    )
+}
+
+fn is_webm_video_codec(codec: &str) -> bool {
+    matches!(codec, "vp8" | "vp9" | "av1")
+}
+
+fn is_webm_audio_codec(codec: &str) -> bool {
+    matches!(codec, "opus" | "vorbis")
+}
+
+fn is_known_subtitle_codec(codec: &str) -> bool {
+    matches!(
+        codec,
+        "subrip" | "srt" | "ass" | "ssa" | "webvtt" | "hdmv_pgs_subtitle" | "dvd_subtitle"
+    )
 }
 
 fn is_pcm_source(media: &MediaInfo, source_container: &str) -> bool {

@@ -49,6 +49,7 @@ pub(crate) fn resolve_container_name(
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase)
         .collect::<Vec<_>>();
 
     if names.is_empty() {
@@ -59,13 +60,10 @@ pub(crate) fn resolve_container_name(
     }
 
     if names.len() == 1 {
-        return Ok(names[0].to_ascii_lowercase());
+        return Ok(names[0].clone());
     }
 
-    if names.iter().any(|name| name.eq_ignore_ascii_case("mov"))
-        && names.iter().any(|name| name.eq_ignore_ascii_case("mp4"))
-        && names.iter().any(|name| name.eq_ignore_ascii_case("m4a"))
-    {
+    if names == ["mov", "mp4", "m4a", "3gp", "3g2", "mj2"] {
         let extension = Path::new(source_path)
             .extension()
             .and_then(|value| value.to_str())
@@ -81,11 +79,7 @@ pub(crate) fn resolve_container_name(
         };
     }
 
-    if names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("matroska"))
-        && names.iter().any(|name| name.eq_ignore_ascii_case("webm"))
-    {
+    if names == ["matroska", "webm"] {
         let extension = Path::new(source_path)
             .extension()
             .and_then(|value| value.to_str())

@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 
-use crate::domain::media::{AudioStreamInfo, OutputSettings, SubtitleStreamInfo, VideoStreamInfo};
+use crate::domain::media::{
+    AudioStreamInfo, OutputFormat, OutputSettings, QualityPreset, SubtitleStreamInfo,
+    VideoStreamInfo,
+};
 
 pub fn input_and_output_args(
     input_path: &str,
@@ -46,6 +49,7 @@ pub fn input_and_output_args(
                 OsString::from("aac"),
             ]);
             add_transcoding_options(&mut args, settings);
+            add_video_quality_options(&mut args, settings);
         }
         ArgumentMode::FirstAudio => {
             args.push(OsString::from("-vn"));
@@ -62,6 +66,7 @@ pub fn input_and_output_args(
                 OsString::from(settings.codec.as_deref().unwrap_or(default_codec)),
             ]);
             add_audio_transcoding_options(&mut args, settings);
+            add_audio_quality_options(&mut args, settings);
         }
     }
 
@@ -114,5 +119,52 @@ fn add_audio_transcoding_options(args: &mut Vec<OsString>, settings: &OutputSett
             OsString::from("-b:a"),
             OsString::from(format!("{bitrate_kbps}k")),
         ]);
+    }
+}
+
+fn add_video_quality_options(args: &mut Vec<OsString>, settings: &OutputSettings) {
+    let crf = match settings.quality {
+        QualityPreset::Original => "18",
+        QualityPreset::High => "20",
+        QualityPreset::Balanced => "23",
+        QualityPreset::Small => "28",
+    };
+    args.extend([OsString::from("-crf"), OsString::from(crf)]);
+}
+
+fn add_audio_quality_options(args: &mut Vec<OsString>, settings: &OutputSettings) {
+    if settings.bitrate_kbps.is_some() {
+        return;
+    }
+
+    match (&settings.format, &settings.quality) {
+        (&OutputFormat::Mp3, &QualityPreset::Original) => {
+            args.extend([OsString::from("-q:a"), OsString::from("0")]);
+        }
+        (&OutputFormat::Mp3, &QualityPreset::High) => {
+            args.extend([OsString::from("-b:a"), OsString::from("320k")]);
+        }
+        (&OutputFormat::Mp3, &QualityPreset::Balanced) => {
+            args.extend([OsString::from("-b:a"), OsString::from("192k")]);
+        }
+        (&OutputFormat::Mp3, &QualityPreset::Small) => {
+            args.extend([OsString::from("-b:a"), OsString::from("128k")]);
+        }
+        (&OutputFormat::M4a, &QualityPreset::Original) => {
+            args.extend([OsString::from("-b:a"), OsString::from("256k")]);
+        }
+        (&OutputFormat::M4a, &QualityPreset::High) => {
+            args.extend([OsString::from("-b:a"), OsString::from("192k")]);
+        }
+        (&OutputFormat::M4a, &QualityPreset::Balanced) => {
+            args.extend([OsString::from("-b:a"), OsString::from("128k")]);
+        }
+        (&OutputFormat::M4a, &QualityPreset::Small) => {
+            args.extend([OsString::from("-b:a"), OsString::from("96k")]);
+        }
+        (&OutputFormat::Flac, &QualityPreset::Original) => {
+            args.extend([OsString::from("-compression_level"), OsString::from("5")]);
+        }
+        _ => {}
     }
 }

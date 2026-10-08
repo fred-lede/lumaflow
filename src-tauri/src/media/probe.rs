@@ -535,6 +535,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_composite_container_with_extra_names_instead_of_matching_fragments() {
+        let json = REAL_STYLE_MP4_JSON.replace(
+            "\"mov,mp4,m4a,3gp,3g2,mj2\"",
+            "\"mov,mp4,m4a,3gp,3g2,mj2,custom\"",
+        );
+        let error = probe_media(
+            &FakeRunner::successful(&json),
+            "/input/movie.mp4",
+        )
+        .expect_err("arbitrary composite names must not be accepted by fragment matching");
+
+        assert_eq!(error.code, "unknown_container");
+    }
+
+    #[test]
     fn probes_wav_pcm_and_flac_audio() {
         let wav = probe_media(&FakeRunner::successful(WAV_JSON), "/input/voice.wav")
             .expect("WAV should probe");
