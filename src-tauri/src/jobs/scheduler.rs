@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -383,6 +383,33 @@ impl Scheduler {
                 .collect(),
             paused: state.paused,
         }
+    }
+
+    pub fn clear_completed(&self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .expect("scheduler state lock should succeed");
+        let completed = state
+            .order
+            .iter()
+            .filter(|id| {
+                state
+                    .jobs
+                    .get(*id)
+                    .is_some_and(|record| {
+                        matches!(record.execution.job.state, JobState::Completed { .. })
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for job_id in completed {
+            state.jobs.remove(&job_id);
+        }
+        let existing_ids = state.jobs.keys().cloned().collect::<HashSet<_>>();
+        state.order.retain(|id| existing_ids.contains(id));
+        state.pending.retain(|id| existing_ids.contains(id));
     }
 
     pub fn wait_for_idle(&self, timeout: Duration) -> bool {
