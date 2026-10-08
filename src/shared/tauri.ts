@@ -59,6 +59,10 @@ export function selectFiles(): Promise<string[]> {
   return invokeLumaFlow<string[]>("select_files");
 }
 
+export function selectOutputFolder(): Promise<string | null> {
+  return invokeLumaFlow<string | null>("select_output_folder");
+}
+
 export function analyzeFiles(paths: string[]): Promise<MediaInfo[]> {
   return invokeLumaFlow<MediaInfo[]>("analyze_files", { paths });
 }
@@ -81,6 +85,10 @@ export function cancelJob(jobId: string): Promise<QueueSnapshot> {
 
 export function retryJob(jobId: string): Promise<QueueSnapshot> {
   return invokeLumaFlow<QueueSnapshot>("retry_job", { jobId });
+}
+
+export function clearCompleted(): Promise<QueueSnapshot> {
+  return invokeLumaFlow<QueueSnapshot>("clear_completed");
 }
 
 export function openOutputFolder(path: string): Promise<void> {

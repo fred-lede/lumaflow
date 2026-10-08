@@ -214,49 +214,72 @@ impl Scheduler {
             .event_sink = event_sink;
     }
 
-    pub fn enqueue(&self, mut execution: JobExecution) -> Result<(), SchedulerError> {
-        let job_id = execution.job.id.clone();
-        execution.job.processing_kind = Some(execution.plan.processing_kind.clone());
-        execution.job.state = JobState::Queued {
-            label: "Queued".to_owned(),
-        };
-        execution.job.progress = 0.0;
-        execution.job.output_path = None;
-        let event = JobEvent::StateChanged {
-            job_id: job_id.clone(),
-            state: execution.job.state.clone(),
-        };
+    pub fn enqueue(&self, execution: JobExecution) -> Result<(), SchedulerError> {
+        self.enqueue_batch(vec![execution])
+    }
 
-        let sink = {
+    pub fn enqueue_batch(&self, mut executions: Vec<JobExecution>) -> Result<(), SchedulerError> {
+        if executions.is_empty() {
+            return Ok(());
+        }
+
+        let (events, sink) = {
             let mut state = self
                 .shared
                 .state
                 .lock()
                 .expect("scheduler state lock should succeed");
-            if state.jobs.contains_key(&job_id) {
-                return Err(SchedulerError::DuplicateJob);
-            }
             release_stale_completed_destinations(&mut state);
-            let destination = canonical_destination(&execution.plan.output_path);
-            if state
+
+            let mut destinations = state
                 .jobs
                 .values()
-                .any(|record| record.destination.as_ref() == Some(&destination))
-            {
-                return Err(SchedulerError::DestinationConflict);
+                .filter_map(|record| record.destination.clone())
+                .collect::<HashSet<_>>();
+            let mut job_ids = HashSet::new();
+            let mut events = Vec::with_capacity(executions.len());
+
+            for execution in &mut executions {
+                let job_id = execution.job.id.clone();
+                if state.jobs.contains_key(&job_id) || !job_ids.insert(job_id.clone()) {
+                    return Err(SchedulerError::DuplicateJob);
+                }
+                execution.job.processing_kind = Some(execution.plan.processing_kind.clone());
+                execution.job.state = JobState::Queued {
+                    label: "Queued".to_owned(),
+                };
+                execution.job.progress = 0.0;
+                execution.job.output_path = None;
+
+                let destination = canonical_destination(&execution.plan.output_path);
+                if !destinations.insert(destination) {
+                    return Err(SchedulerError::DestinationConflict);
+                }
+                events.push(JobEvent::StateChanged {
+                    job_id,
+                    state: execution.job.state.clone(),
+                });
             }
-            state.order.push(job_id.clone());
-            state.pending.push_back(job_id.clone());
-            state.jobs.insert(
-                job_id,
-                JobRecord {
-                    execution,
-                    destination: Some(destination),
-                },
-            );
-            Arc::clone(&state.event_sink)
+
+            for execution in executions {
+                let job_id = execution.job.id.clone();
+                let destination = canonical_destination(&execution.plan.output_path);
+                state.order.push(job_id.clone());
+                state.pending.push_back(job_id.clone());
+                state.jobs.insert(
+                    job_id,
+                    JobRecord {
+                        execution,
+                        destination: Some(destination),
+                    },
+                );
+            }
+            (events, Arc::clone(&state.event_sink))
         };
-        sink(event);
+
+        for event in events {
+            sink(event);
+        }
         self.shared.changed.notify_all();
         Ok(())
     }
@@ -385,7 +408,7 @@ impl Scheduler {
         }
     }
 
-    pub fn clear_completed(&self) {
+    pub fn clear_completed(&self) -> Vec<String> {
         let mut state = self
             .shared
             .state
@@ -404,12 +427,13 @@ impl Scheduler {
             })
             .cloned()
             .collect::<Vec<_>>();
-        for job_id in completed {
-            state.jobs.remove(&job_id);
+        for job_id in &completed {
+            state.jobs.remove(job_id);
         }
         let existing_ids = state.jobs.keys().cloned().collect::<HashSet<_>>();
         state.order.retain(|id| existing_ids.contains(id));
         state.pending.retain(|id| existing_ids.contains(id));
+        completed
     }
 
     pub fn wait_for_idle(&self, timeout: Duration) -> bool {

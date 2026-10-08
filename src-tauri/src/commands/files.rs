@@ -5,7 +5,6 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::domain::media::MediaInfo;
-use crate::media::probe::{probe_media, ProcessCommandRunner};
 
 use super::queue::{normalize_selected_path, BackendState};
 use super::CommandError;
@@ -51,18 +50,38 @@ pub fn select_files(
 }
 
 #[tauri::command]
+pub fn select_output_folder(
+    app: AppHandle,
+    state: State<'_, BackendState>,
+) -> Result<Option<String>, CommandError> {
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("Select output folder")
+        .blocking_pick_folder();
+    let Some(selected_path) = selected else {
+        return Ok(None);
+    };
+    let path = PathBuf::try_from(selected_path).map_err(|error| {
+        CommandError::with_details(
+            "invalid_output_directory",
+            "The native picker returned an invalid output folder",
+            error.to_string(),
+        )
+    })?;
+    let normalized = super::queue::normalize_existing_directory(&path.to_string_lossy())?;
+    state.remember_output_directory(normalized.clone());
+    Ok(Some(normalized.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 pub fn analyze_files(
     state: State<'_, BackendState>,
     paths: Vec<String>,
 ) -> Result<Vec<MediaInfo>, CommandError> {
-    let runner = ProcessCommandRunner;
     paths
         .into_iter()
-        .map(|path| {
-            let normalized = normalize_selected_path(&path)?;
-            state.remember_selected_path(normalized.clone());
-            probe_media(&runner, &normalized).map_err(CommandError::from)
-        })
+        .map(|path| state.probe_selected_path(&path))
         .collect()
 }
 
@@ -71,7 +90,16 @@ pub fn open_output_folder(
     state: State<'_, BackendState>,
     path: String,
 ) -> Result<(), CommandError> {
-    let normalized = normalize_path_for_lookup(&path)?;
+    let _command_lock = state
+        .command_lock
+        .lock()
+        .expect("command lock should succeed");
+    let folder = registered_output_folder(&state, &path)?;
+    open_folder(&folder)
+}
+
+fn registered_output_folder(state: &BackendState, path: &str) -> Result<PathBuf, CommandError> {
+    let normalized = normalize_path_for_lookup(path)?;
     if !state.is_registered_output_path(&normalized) {
         return Err(CommandError::new(
             "output_path_not_registered",
@@ -85,13 +113,19 @@ pub fn open_output_folder(
             "The output path has no containing folder",
         )
     })?;
+    if !state.is_registered_output_directory(folder) {
+        return Err(CommandError::new(
+            "output_directory_not_registered",
+            "The output directory must be selected through the native folder picker first",
+        ));
+    }
     if !folder.is_dir() {
         return Err(CommandError::new(
             "output_directory_not_found",
             "The output folder does not exist",
         ));
     }
-    open_folder(folder)
+    Ok(folder.to_owned())
 }
 
 fn normalize_path_for_lookup(raw_path: &str) -> Result<PathBuf, CommandError> {
@@ -167,4 +201,19 @@ fn open_folder(folder: &Path) -> Result<(), CommandError> {
         )
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{registered_output_folder, BackendState};
+
+    #[test]
+    fn rejects_renderer_only_output_paths_before_opening_any_folder() {
+        let state = BackendState::new();
+
+        let error = registered_output_folder(&state, "/tmp/renderer-only/clip.flac")
+            .expect_err("renderer-only output paths must not be opened");
+
+        assert_eq!(error.code, "output_path_not_registered");
+    }
 }

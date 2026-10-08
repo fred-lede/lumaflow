@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { EnqueueJobRequest } from "../domain/job";
-import { LumaFlowError, analyzeFiles, enqueueJobs, openOutputFolder } from "./tauri";
+import {
+  LumaFlowError,
+  analyzeFiles,
+  clearCompleted,
+  enqueueJobs,
+  openOutputFolder,
+  selectOutputFolder,
+} from "./tauri";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -24,6 +31,16 @@ describe("typed Tauri wrappers", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("analyze_files", {
       paths: ["/input/one.wav"],
     });
+  });
+
+  it("uses backend-owned output folder selection and queue cleanup commands", async () => {
+    mockedInvoke.mockResolvedValueOnce("/output").mockResolvedValueOnce({ jobs: [], paused: false });
+
+    await expect(selectOutputFolder()).resolves.toBe("/output");
+    await clearCompleted();
+
+    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "select_output_folder");
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "clear_completed");
   });
 
   it("normalizes backend failures into LumaFlowError", async () => {

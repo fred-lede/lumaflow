@@ -503,6 +503,42 @@ mod tests {
     }
 
     #[test]
+    fn emits_at_most_one_progress_event_per_changed_canonical_timestamp() {
+        let directory = fixture_directory("deduplicated-progress");
+        let program = fake_program(
+            &directory,
+            "out=\"\"; for arg in \"$@\"; do out=\"$arg\"; done; printf 'out_time_us=500000\\nout_time_ms=9000000\\nout_time=00:00:08.000000\\nprogress=continue\\nout_time_us=500000\\nout_time_ms=9000000\\nout_time=00:00:08.000000\\nprogress=continue\\nout_time_us=1000000\\nout_time_ms=1000000\\nout_time=00:00:01.000000\\nprogress=continue\\nprogress=end\\n'; printf 'converted' > \"$out\"",
+        );
+        let execution = execution(&directory);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = {
+            let events = Arc::clone(&events);
+            Arc::new(move |event| {
+                events
+                    .lock()
+                    .expect("event lock should succeed")
+                    .push(event)
+            })
+        };
+
+        FfmpegRunner::new(program)
+            .run(execution, CancellationToken::new(), event_sink)
+            .expect("fake FFmpeg should succeed");
+
+        let progress = events
+            .lock()
+            .expect("event lock should succeed")
+            .iter()
+            .filter_map(|event| match event {
+                JobEvent::Progress { progress, .. } => Some(*progress),
+                JobEvent::StateChanged { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(progress, vec![0.25, 0.5, 1.0]);
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
     fn maps_nonzero_exit_and_cleans_temporary_output() {
         let directory = fixture_directory("failure");
         let program = fake_program(
