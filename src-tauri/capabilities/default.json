@@ -4,7 +4,6 @@
   "description": "Desktop permissions for the main window, limited to user-selected file access and app events.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
     "core:event:default",
     "dialog:allow-open",
     "fs:allow-read-file",

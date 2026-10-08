@@ -45,3 +45,6 @@ jobs:
 
       - name: Test Rust backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Tauri package smoke test
+        run: npm exec -- tauri build --debug --bundles deb
