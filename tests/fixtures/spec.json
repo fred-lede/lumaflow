@@ -78,6 +78,8 @@
         "kind": "video",
         "videoCodec": "libx264",
         "audioCodec": "aac",
+        "probeVideoCodec": "h264",
+        "probeAudioCodec": "aac",
         "codecFlags": [
           "-preset",
           "ultrafast",
@@ -95,6 +97,8 @@
         "kind": "video",
         "videoCodec": "libx264",
         "audioCodec": "aac",
+        "probeVideoCodec": "h264",
+        "probeAudioCodec": "aac",
         "codecFlags": [
           "-preset",
           "ultrafast",
@@ -110,6 +114,8 @@
         "kind": "video",
         "videoCodec": "libx264",
         "audioCodec": "aac",
+        "probeVideoCodec": "h264",
+        "probeAudioCodec": "aac",
         "codecFlags": [
           "-preset",
           "ultrafast",
@@ -127,6 +133,8 @@
         "kind": "video",
         "videoCodec": "libvpx-vp9",
         "audioCodec": "libopus",
+        "probeVideoCodec": "vp9",
+        "probeAudioCodec": "opus",
         "codecFlags": [
           "-b:v",
           "200k",
@@ -148,6 +156,8 @@
         "kind": "video",
         "videoCodec": "mpeg4",
         "audioCodec": "libmp3lame",
+        "probeVideoCodec": "mpeg4",
+        "probeAudioCodec": "mp3",
         "codecFlags": [
           "-q:v",
           "5",
@@ -160,6 +170,7 @@
         "container": "mp3",
         "kind": "audio",
         "audioCodec": "libmp3lame",
+        "probeAudioCodec": "mp3",
         "codecFlags": [
           "-q:a",
           "9"
@@ -170,6 +181,7 @@
         "container": "m4a",
         "kind": "audio",
         "audioCodec": "aac",
+        "probeAudioCodec": "aac",
         "codecFlags": [
           "-b:a",
           "96k",
@@ -182,6 +194,7 @@
         "container": "wav",
         "kind": "audio",
         "audioCodec": "pcm_s16le",
+        "probeAudioCodec": "pcm_s16le",
         "codecFlags": []
       },
       {
@@ -189,6 +202,7 @@
         "container": "flac",
         "kind": "audio",
         "audioCodec": "flac",
+        "probeAudioCodec": "flac",
         "codecFlags": [
           "-compression_level",
           "5"
@@ -199,6 +213,7 @@
         "container": "ogg",
         "kind": "audio",
         "audioCodec": "libopus",
+        "probeAudioCodec": "opus",
         "codecFlags": [
           "-b:a",
           "64k",

@@ -24,7 +24,9 @@ that the configured executable's version and digest match the committed trusted
 spec, generates
 MP4, MOV, MKV, WebM, AVI, MP3, M4A, WAV, FLAC, and OGG files, and writes
 manifest.json with the exact tool version, binary digest, byte sizes, and
-SHA-256 checksum for every fixture.
+SHA-256 checksum for every fixture. It also requires the trusted FFprobe binary
+and probes every generated file, checking the committed container kind and
+expected audio/video codecs before accepting the manifest.
 
 The ordinary npm test command excludes tests/e2e and therefore runs without
 FFmpeg environment variables. The explicit npm run test:e2e command requires
@@ -52,7 +54,9 @@ This is renderer integration coverage, not a full desktop renderer-to-Tauri
 run. Full desktop coverage is opt-in with LUMAFLOW_DESKTOP_E2E=1 and requires
 an executable runner supplied through LUMAFLOW_TAURI_E2E_RUNNER.
 
-The desktop runner protocol is strict. The test invokes the executable as
+The desktop test is protocol-only; it does not itself prove that a native Tauri
+window was launched. Native execution is the responsibility of the trusted
+runner supplied by the caller. The protocol is strict: the test invokes the executable as
 runner e2e and supplies LUMAFLOW_DESKTOP_E2E_PROTOCOL=1 and a fresh
 LUMAFLOW_DESKTOP_E2E_NONCE value. The runner must write exactly one non-empty
 JSON line to stdout with this shape, using the same nonce:

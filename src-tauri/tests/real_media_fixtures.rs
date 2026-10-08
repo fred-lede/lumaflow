@@ -23,13 +23,24 @@ struct PinnedFfprobeRunner {
 struct TrustedSpec {
     schema_version: u32,
     generator_version: u32,
-    parameters: serde_json::Value,
+    parameters: TrustedParameters,
     ffmpeg: TrustedBinary,
     ffprobe: TrustedBinary,
     generation: TrustedGeneration,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TrustedParameters {
+    duration_seconds: u32,
+    video_size: String,
+    video_rate: u32,
+    audio_frequency_hz: u32,
+    audio_sample_rate_hz: u32,
+    threads: u32,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct TrustedBinary {
     version_policy: String,
@@ -37,20 +48,40 @@ struct TrustedBinary {
     assets: std::collections::HashMap<String, TrustedAsset>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 struct TrustedAsset {
     sha256: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct TrustedGeneration {
+    shared_flags: Vec<String>,
+    output_metadata_flags: Vec<String>,
+    video_audio_flags: Vec<String>,
+    video_input: Vec<String>,
+    audio_input: Vec<String>,
     fixtures: Vec<TrustedFixture>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum FixtureKind {
+    Video,
+    Audio,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct TrustedFixture {
     name: String,
     container: String,
+    kind: FixtureKind,
+    video_codec: Option<String>,
+    audio_codec: String,
+    probe_video_codec: Option<String>,
+    probe_audio_codec: String,
+    codec_flags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,14 +89,16 @@ struct TrustedFixture {
 struct FixtureManifest {
     schema_version: u32,
     generator_version: u32,
-    parameters: serde_json::Value,
+    parameters: TrustedParameters,
     ffmpeg: FixtureManifestBinary,
     files: Vec<FixtureManifestFile>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FixtureManifestBinary {
     version: String,
+    version_line: String,
     sha256: String,
 }
 
@@ -173,6 +206,94 @@ fn trusted_platform_key() -> &'static str { "linux-arm64" }
 )))]
 fn trusted_platform_key() -> &'static str { "unsupported-platform" }
 
+fn ensure_supported_platform() {
+    let platform = trusted_platform_key();
+    assert_eq!(
+        platform,
+        "darwin-arm64",
+        "Task 9 real-media verification is supported only on darwin-arm64; refusing unvalidated host {platform}"
+    );
+}
+
+fn expected_parameters() -> TrustedParameters {
+    TrustedParameters {
+        duration_seconds: 1,
+        video_size: "160x90".to_owned(),
+        video_rate: 10,
+        audio_frequency_hz: 440,
+        audio_sample_rate_hz: 48_000,
+        threads: 1,
+    }
+}
+
+fn video_fixture(
+    name: &str,
+    container: &str,
+    video_codec: &str,
+    audio_codec: &str,
+    probe_video_codec: &str,
+    probe_audio_codec: &str,
+    codec_flags: &[&str],
+) -> TrustedFixture {
+    TrustedFixture {
+        name: name.to_owned(),
+        container: container.to_owned(),
+        kind: FixtureKind::Video,
+        video_codec: Some(video_codec.to_owned()),
+        audio_codec: audio_codec.to_owned(),
+        probe_video_codec: Some(probe_video_codec.to_owned()),
+        probe_audio_codec: probe_audio_codec.to_owned(),
+        codec_flags: codec_flags.iter().map(|flag| (*flag).to_owned()).collect(),
+    }
+}
+
+fn audio_fixture(
+    name: &str,
+    container: &str,
+    audio_codec: &str,
+    probe_audio_codec: &str,
+    codec_flags: &[&str],
+) -> TrustedFixture {
+    TrustedFixture {
+        name: name.to_owned(),
+        container: container.to_owned(),
+        kind: FixtureKind::Audio,
+        video_codec: None,
+        audio_codec: audio_codec.to_owned(),
+        probe_video_codec: None,
+        probe_audio_codec: probe_audio_codec.to_owned(),
+        codec_flags: codec_flags.iter().map(|flag| (*flag).to_owned()).collect(),
+    }
+}
+
+fn expected_generation() -> TrustedGeneration {
+    TrustedGeneration {
+        shared_flags: ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-fflags", "+bitexact"]
+            .iter()
+            .map(|flag| (*flag).to_owned())
+            .collect(),
+        output_metadata_flags: ["-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact", "-map_metadata", "-1", "-map_chapters", "-1"]
+            .iter()
+            .map(|flag| (*flag).to_owned())
+            .collect(),
+        video_audio_flags: vec!["-b:a".to_owned(), "96k".to_owned()],
+        video_input: vec!["-f".to_owned(), "lavfi".to_owned(), "-i".to_owned(), "testsrc2=size=160x90:rate=10:duration=1".to_owned()],
+        audio_input: vec!["-f".to_owned(), "lavfi".to_owned(), "-i".to_owned(), "sine=frequency=440:sample_rate=48000:duration=1".to_owned()],
+        fixtures: vec![
+            video_fixture("sample.mp4", "mp4", "libx264", "aac", "h264", "aac", &["-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]),
+            video_fixture("sample.mov", "mov", "libx264", "aac", "h264", "aac", &["-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p"]),
+            video_fixture("sample.mkv", "matroska", "libx264", "aac", "h264", "aac", &["-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p", "-cluster_time_limit", "1000"]),
+            video_fixture("sample.webm", "webm", "libvpx-vp9", "libopus", "vp9", "opus", &["-b:v", "200k", "-crf", "40", "-deadline", "realtime", "-cpu-used", "8", "-b:a", "64k", "-cluster_time_limit", "1000"]),
+            video_fixture("sample.avi", "avi", "mpeg4", "libmp3lame", "mpeg4", "mp3", &["-q:v", "5", "-q:a", "9"]),
+            audio_fixture("sample.mp3", "mp3", "libmp3lame", "mp3", &["-q:a", "9"]),
+            audio_fixture("sample.m4a", "m4a", "aac", "aac", &["-b:a", "96k", "-f", "ipod"]),
+            audio_fixture("sample.wav", "wav", "pcm_s16le", "pcm_s16le", &[]),
+            audio_fixture("sample.flac", "flac", "flac", "flac", &["-compression_level", "5"]),
+            audio_fixture("sample.ogg", "ogg", "libopus", "opus", &["-b:a", "64k", "-vbr", "on", "-application", "audio", "-serial_offset", "0", "-f", "ogg"]),
+        ],
+    }
+}
+
 fn load_trusted_spec() -> TrustedSpec {
     let path = repository_fixture_directory().join("spec.json");
     let spec: TrustedSpec = serde_json::from_str(
@@ -183,9 +304,16 @@ fn load_trusted_spec() -> TrustedSpec {
     .unwrap_or_else(|error| panic!("trusted fixture specification is invalid: {error}"));
     assert_eq!(spec.schema_version, 2, "trusted fixture spec schema must be 2");
     assert_eq!(spec.generator_version, 2, "trusted fixture spec generator must be 2");
+    assert_eq!(spec.parameters, expected_parameters(), "trusted generation parameters changed");
+    assert_eq!(spec.generation, expected_generation(), "trusted generation vectors changed");
     assert_eq!(spec.ffmpeg.version_policy, "exact", "FFmpeg trust policy must be exact");
+    assert_eq!(spec.ffmpeg.version, "8.1.2", "FFmpeg trusted version changed");
+    assert_eq!(spec.ffmpeg.assets.len(), 1, "FFmpeg trust policy must contain only the supported asset identity");
+    assert_eq!(spec.ffmpeg.assets.get("darwin-arm64").map(|asset| asset.sha256.as_str()), Some("1332dc2de372bade9a8a63da0d6cdfab9de97fcefbae707bcc0b0506e1203327"));
     assert_eq!(spec.ffprobe.version_policy, "exact", "FFprobe trust policy must be exact");
-    assert_eq!(spec.generation.fixtures.len(), 10, "trusted fixture spec must list 10 fixtures");
+    assert_eq!(spec.ffprobe.version, "8.1.2", "FFprobe trusted version changed");
+    assert_eq!(spec.ffprobe.assets.len(), 1, "FFprobe trust policy must contain only the supported asset identity");
+    assert_eq!(spec.ffprobe.assets.get("darwin-arm64").map(|asset| asset.sha256.as_str()), Some("4322275c1c2ac6ba15c695b288788bc1204e75211b3d5c030e5812c82a6dff73"));
     spec
 }
 
@@ -261,6 +389,10 @@ fn require_generated_fixtures(spec: &TrustedSpec, trusted_ffmpeg: &TrustedBinary
     assert_eq!(manifest.parameters, spec.parameters, "fixture manifest parameters must match the trusted spec");
     let (trusted_version, trusted_sha256) = trusted_binary_identity(trusted_ffmpeg, "FFmpeg");
     assert_eq!(manifest.ffmpeg.version, trusted_version);
+    let manifest_version_line = manifest.ffmpeg.version_line.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(manifest_version_line.first().copied(), Some("ffmpeg"));
+    assert_eq!(manifest_version_line.get(1).copied(), Some("version"));
+    assert_eq!(manifest_version_line.get(2).copied(), Some(trusted_version));
     assert_eq!(manifest.ffmpeg.sha256, trusted_sha256);
     assert_eq!(manifest.files.len(), spec.generation.fixtures.len());
     manifest.files.iter().zip(&spec.generation.fixtures).for_each(|(file, expected)| {
@@ -278,7 +410,25 @@ fn require_generated_fixtures(spec: &TrustedSpec, trusted_ffmpeg: &TrustedBinary
             let path = directory.join(&name.name);
             path
         })
-        .collect()
+    .collect()
+}
+
+fn assert_fixture_probe(media: &MediaInfo, expected: &TrustedFixture) {
+    assert_eq!(media.container, expected.container, "unexpected container for {}", media.file_name);
+    assert!(media.duration_seconds > 0.0);
+    match expected.kind {
+        FixtureKind::Video => {
+            assert_eq!(media.video_streams.len(), 1, "unexpected video stream count for {}", media.file_name);
+            assert_eq!(media.audio_streams.len(), 1, "unexpected audio stream count for {}", media.file_name);
+            assert_eq!(media.video_streams[0].codec, expected.probe_video_codec.as_deref().expect("video codec contract"));
+        }
+        FixtureKind::Audio => {
+            assert!(media.video_streams.is_empty(), "audio fixture unexpectedly has video: {}", media.file_name);
+            assert_eq!(media.audio_streams.len(), 1, "unexpected audio stream count for {}", media.file_name);
+        }
+    }
+    assert_eq!(media.audio_streams[0].codec, expected.probe_audio_codec);
+    assert!(media.subtitle_streams.is_empty(), "fixture unexpectedly has subtitles: {}", media.file_name);
 }
 
 fn settings(output_directory: &Path, format: OutputFormat) -> OutputSettings {
@@ -338,6 +488,7 @@ fn queue_job(id: &str, media: &MediaInfo, settings: OutputSettings) -> QueueJob 
 
 #[test]
 fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
+    ensure_supported_platform();
     let spec = load_trusted_spec();
     let ffmpeg = required_executable("LUMAFLOW_FFMPEG_TEST_BIN", &spec.ffmpeg, "FFmpeg");
     let ffprobe = required_executable("LUMAFLOW_FFPROBE_TEST_BIN", &spec.ffprobe, "FFprobe");
@@ -354,9 +505,7 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
         probed.push(media);
     }
     for (media, expected_fixture) in probed.iter().zip(&spec.generation.fixtures) {
-        assert_eq!(media.container, expected_fixture.container, "unexpected container for {}", media.file_name);
-        assert!(media.duration_seconds > 0.0);
-        assert!(!media.audio_streams.is_empty() || !media.video_streams.is_empty());
+        assert_fixture_probe(media, expected_fixture);
     }
 
     let matrix = [

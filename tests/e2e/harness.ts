@@ -261,6 +261,7 @@ function parseRealMediaTrace(value: unknown): RealMediaTrace {
 }
 
 function requiredExecutable(name: string, policy: FixtureBinaryPolicy, tool: "ffmpeg" | "ffprobe"): string {
+  const trustedIdentity = trustedBinaryIdentity(policy, tool === "ffmpeg" ? "FFmpeg" : "FFprobe");
   const value = process.env[name];
   if (!value || !existsSync(value)) {
     throw new Error(name + " is required for real media E2E; set it to the release-pinned executable");
@@ -279,7 +280,6 @@ function requiredExecutable(name: string, policy: FixtureBinaryPolicy, tool: "ff
     throw new Error(name + " could not execute -version: " + String(error));
   }
   const version = parseToolVersion(versionOutput, tool);
-  const trustedIdentity = trustedBinaryIdentity(policy, tool === "ffmpeg" ? "FFmpeg" : "FFprobe");
   if (version !== trustedIdentity.version) {
     throw new Error(name + " reports version " + version + "; committed trusted identity requires " + trustedIdentity.version);
   }

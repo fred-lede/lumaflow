@@ -83,9 +83,9 @@ describe("real conversion boundary", () => {
   }, 30000);
 });
 
-describe("opt-in desktop E2E protocol", () => {
+describe("opt-in desktop E2E protocol (protocol-only; native execution is runner-owned)", () => {
   it.runIf(process.env.LUMAFLOW_DESKTOP_E2E === "1")(
-    "requires a protocol-aware Tauri runner and exact nonce-bound JSON pass response",
+    "requires a protocol-aware runner and exact nonce-bound JSON pass response",
     () => {
       const runner = requiredExecutable("LUMAFLOW_TAURI_E2E_RUNNER");
       const ffmpeg = requiredExecutable("LUMAFLOW_FFMPEG_TEST_BIN");

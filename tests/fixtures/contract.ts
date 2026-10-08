@@ -23,6 +23,8 @@ export type FixtureDefinition = {
   kind: "video" | "audio";
   videoCodec?: string;
   audioCodec: string;
+  probeVideoCodec?: string;
+  probeAudioCodec: string;
   codecFlags: string[];
 };
 
@@ -136,12 +138,16 @@ function fixtureDefinition(value: unknown, index: number): FixtureDefinition {
     container: string(input.container, label + ".container"),
     kind,
     audioCodec: string(input.audioCodec, label + ".audioCodec"),
+    probeAudioCodec: string(input.probeAudioCodec, label + ".probeAudioCodec"),
     codecFlags: stringArray(input.codecFlags, label + ".codecFlags"),
   };
   if (kind === "video") {
     definition.videoCodec = string(input.videoCodec, label + ".videoCodec");
+    definition.probeVideoCodec = string(input.probeVideoCodec, label + ".probeVideoCodec");
   } else if (input.videoCodec !== undefined) {
     throw new Error("Fixture " + label + " audio entries cannot define videoCodec");
+  } else if (input.probeVideoCodec !== undefined) {
+    throw new Error("Fixture " + label + " audio entries cannot define probeVideoCodec");
   }
   return definition;
 }
