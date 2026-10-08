@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
+    "test:e2e": "vitest run tests/e2e",
     "test:ui": "vitest --ui",
+    "fixtures": "node --experimental-strip-types scripts/generate-fixtures.ts",
     "tauri": "tauri"
   },
   "dependencies": {
