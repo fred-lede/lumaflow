@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FC, MouseEvent as ReactMouseEvent } from "react";
 
 import {
@@ -10,9 +10,11 @@ import {
 import DropZone from "../features/intake/DropZone";
 import SourceFileList from "../features/intake/SourceFileList";
 import { useFileIntake } from "../features/intake/useFileIntake";
+import QueuePanel from "../features/queue/QueuePanel";
+import { useQueueEvents } from "../features/queue/useQueueEvents";
 import OutputSettings from "../features/settings/OutputSettings";
 import { useConversionSettings } from "../features/settings/useConversionSettings";
-import { LumaFlowError, selectOutputFolder } from "../shared/tauri";
+import { enqueueJobs, LumaFlowError, selectOutputFolder } from "../shared/tauri";
 import GlassPanel from "../ui/GlassPanel";
 import StatusBadge from "../ui/StatusBadge";
 
@@ -26,7 +28,18 @@ export function handleSkipLinkActivation(
 export const AppShell: FC = () => {
   const [themeMode, setThemeMode] = useState<ThemeMode>("auto");
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const intake = useFileIntake();
+  const queue = useQueueEvents();
+  const intakeAdapter = useMemo(
+    () => ({
+      enqueueJobs: async (...args: Parameters<typeof enqueueJobs>) => {
+        const snapshot = await enqueueJobs(...args);
+        queue.controller.applySnapshot(snapshot);
+        return snapshot;
+      },
+    }),
+    [queue.controller],
+  );
+  const intake = useFileIntake({ adapter: intakeAdapter });
   const conversion = useConversionSettings();
 
   useEffect(() => {
@@ -159,6 +172,8 @@ export const AppShell: FC = () => {
             </div>
           </GlassPanel>
         </div>
+
+        <QueuePanel controller={queue.controller} />
 
         <div
           className="sr-only"
