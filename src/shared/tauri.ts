@@ -61,11 +61,11 @@ export function selectFiles(): Promise<string[]> {
   return invokeLumaFlow<string[]>("select_files");
 }
 
+export const AUTHORIZED_FILE_DROP_EVENT = "authorized-file-drop";
+
 export function registerFileDropHandler(handler: (paths: string[]) => void): Promise<UnlistenFn> {
-  return getCurrentWebview().onDragDropEvent((event) => {
-    if (event.payload.type === "drop") {
-      handler(event.payload.paths);
-    }
+  return getCurrentWebview().listen<string[]>(AUTHORIZED_FILE_DROP_EVENT, (event) => {
+    handler(event.payload);
   });
 }
 

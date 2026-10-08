@@ -64,6 +64,17 @@ impl BackendState {
             .insert(path);
     }
 
+    pub(crate) fn register_trusted_dropped_paths(&self, paths: &[PathBuf]) -> Vec<String> {
+        paths
+            .iter()
+            .filter_map(|path| normalize_selected_path(&path.to_string_lossy()).ok())
+            .map(|path| {
+                self.remember_selected_path(path.clone());
+                path.to_string_lossy().into_owned()
+            })
+            .collect()
+    }
+
     pub(crate) fn require_selected_path(&self, raw_path: &str) -> Result<PathBuf, CommandError> {
         let path = normalize_selected_path(raw_path)?;
         if self
@@ -621,6 +632,25 @@ mod tests {
             .expect_err("renderer-only paths must not be analyzed");
 
         assert_eq!(error.code, "path_not_selected");
+        let _ = fs::remove_dir_all(source.parent().expect("source should have a parent"));
+    }
+
+    #[test]
+    fn trusted_dropped_paths_are_registered_before_analysis() {
+        let source = temporary_file();
+        let probed = media_info(&source, "clip.wav");
+        let state = BackendState::with_probe(Arc::new(move |_| Ok(probed.clone())));
+
+        let registered = state.register_trusted_dropped_paths(std::slice::from_ref(&source));
+
+        assert_eq!(
+            registered,
+            vec![fs::canonicalize(&source).expect("source should canonicalize")]
+        );
+        let analyzed = state
+            .probe_selected_path(&source.to_string_lossy())
+            .expect("trusted dropped source should be analyzable");
+        assert_eq!(analyzed.file_name, "clip.wav");
         let _ = fs::remove_dir_all(source.parent().expect("source should have a parent"));
     }
 

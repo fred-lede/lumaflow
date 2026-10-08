@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager};
+use tauri::{DragDropEvent, Emitter, Manager, WebviewEvent};
+
+const AUTHORIZED_FILE_DROP_EVENT: &str = "authorized-file-drop";
 
 pub mod commands;
 pub mod domain;
@@ -20,6 +22,15 @@ pub fn run() {
                     let _ = handle.emit("job-event", event);
                 }));
             Ok(())
+        })
+        .on_webview_event(|webview, event| {
+            if let WebviewEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+                let state = webview.state::<commands::queue::BackendState>();
+                let authorized_paths = state.register_trusted_dropped_paths(paths);
+                if !authorized_paths.is_empty() {
+                    let _ = webview.emit(AUTHORIZED_FILE_DROP_EVENT, authorized_paths);
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::files::select_files,
@@ -58,6 +69,9 @@ mod tests {
         ] {
             assert!(source.contains(command), "missing handler registration: {command}");
         }
+        assert!(source.contains("DragDropEvent::Drop"));
+        assert!(source.contains("on_webview_event"));
+        assert!(source.contains("authorized-file-drop"));
 
         let capabilities: Value = serde_json::from_str(include_str!(
             "../capabilities/default.json"
