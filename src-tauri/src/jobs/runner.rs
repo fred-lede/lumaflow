@@ -1,5 +1,6 @@
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read};
+use std::ffi::OsStr;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -12,6 +13,8 @@ use crate::domain::job::{JobError, JobEvent};
 use super::progress::{ProgressParser, ProgressUpdate};
 use super::scheduler::{CancellationToken, EventSink, JobExecution, JobExecutor};
 use super::temp_output::TempOutput;
+
+pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
 pub struct FfmpegRunner {
     program: OsString,
@@ -45,24 +48,18 @@ impl FfmpegRunner {
             });
         }
 
-        let mut temp = TempOutput::create(&execution.plan.output_path).map_err(|error| io_error(
-            "temp_output_create_failed",
-            "Could not create a temporary output",
-            error,
-        ))?;
-        let mut args = execution.plan.ffmpeg_args.clone();
-        let planned_output = args.pop().ok_or_else(|| JobError {
-            code: "invalid_ffmpeg_arguments".to_owned(),
-            message: "The conversion plan did not contain an output path".to_owned(),
-            details: None,
+        let mut args = validate_plan_arguments(&execution)?;
+        let mut temp = TempOutput::create(&execution.plan.output_path).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                destination_exists_error()
+            } else {
+                io_error(
+                    "temp_output_create_failed",
+                    "Could not create a temporary output",
+                    error,
+                )
+            }
         })?;
-        if PathBuf::from(planned_output) != execution.plan.output_path {
-            return Err(JobError {
-                code: "invalid_ffmpeg_arguments".to_owned(),
-                message: "The conversion plan output argument did not match its output path".to_owned(),
-                details: None,
-            });
-        }
         if cancellation.is_cancelled() {
             return Err(cancelled_error());
         }
@@ -106,11 +103,18 @@ impl FfmpegRunner {
             }
         };
 
-        let (progress_tx, progress_rx) = mpsc::channel::<String>();
+        let (progress_tx, progress_rx) = mpsc::channel::<Result<String, String>>();
         let progress_thread = thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                if progress_tx.send(line).is_err() {
+            for line in reader.lines() {
+                let message = match line {
+                    Ok(line) => Ok(line),
+                    Err(error) => Err(error.to_string()),
+                };
+                if progress_tx.send(message.clone()).is_err() {
+                    break;
+                }
+                if message.is_err() {
                     break;
                 }
             }
@@ -129,7 +133,17 @@ impl FfmpegRunner {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => match progress_rx.recv_timeout(Duration::from_millis(25)) {
-                    Ok(line) => emit_progress(&execution.job.id, &mut parser, &line, &emit),
+                    Ok(Ok(line)) => emit_progress(&execution.job.id, &mut parser, &line, &emit),
+                    Ok(Err(error)) => {
+                        stop_child(&mut child);
+                        let _ = progress_thread.join();
+                        let _ = stderr_thread.join();
+                        return Err(io_error(
+                            "ffmpeg_output_failed",
+                            "Could not read FFmpeg progress output",
+                            error,
+                        ));
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {}
                 },
@@ -144,9 +158,34 @@ impl FfmpegRunner {
 
         let _ = progress_thread.join();
         while let Ok(line) = progress_rx.try_recv() {
-            emit_progress(&execution.job.id, &mut parser, &line, &emit);
+            match line {
+                Ok(line) => emit_progress(&execution.job.id, &mut parser, &line, &emit),
+                Err(error) => {
+                    return Err(io_error(
+                        "ffmpeg_output_failed",
+                        "Could not read FFmpeg progress output",
+                        error,
+                    ));
+                }
+            }
         }
-        let stderr = stderr_thread.join().unwrap_or_else(|_| "FFmpeg stderr reader failed".to_owned());
+        let stderr = match stderr_thread.join() {
+            Ok(Ok(stderr)) => stderr,
+            Ok(Err(error)) => {
+                return Err(io_error(
+                    "ffmpeg_output_failed",
+                    "Could not read FFmpeg error output",
+                    error,
+                ));
+            }
+            Err(_) => {
+                return Err(JobError {
+                    code: "ffmpeg_output_failed".to_owned(),
+                    message: "FFmpeg error reader failed".to_owned(),
+                    details: None,
+                });
+            }
+        };
 
         if cancellation.is_cancelled() {
             return Err(cancelled_error());
@@ -159,13 +198,27 @@ impl FfmpegRunner {
             });
         }
 
-        temp.commit().map(|_| ()).map_err(|error| {
-            io_error(
-                "output_commit_failed",
-                "Could not commit the converted output",
-                error,
-            )
-        })
+        let commit = cancellation
+            .begin_commit()
+            .map_err(|_| cancelled_error())?;
+        match temp.commit() {
+            Ok(_) => {
+                commit.finish(true);
+                Ok(())
+            }
+            Err(error) => {
+                commit.finish(false);
+                Err(if error.kind() == io::ErrorKind::AlreadyExists {
+                    destination_exists_error()
+                } else {
+                    io_error(
+                        "output_commit_failed",
+                        "Could not commit the converted output",
+                        error,
+                    )
+                })
+            }
+        }
     }
 }
 
@@ -198,10 +251,26 @@ fn emit_progress(
     });
 }
 
-fn read_stderr(mut stderr: impl Read) -> String {
-    let mut output = Vec::new();
-    let _ = stderr.read_to_end(&mut output);
-    String::from_utf8_lossy(&output).trim().to_owned()
+fn read_stderr(mut stderr: impl Read) -> io::Result<String> {
+    let mut output = Vec::with_capacity(MAX_STDERR_BYTES);
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let bytes_read = stderr.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let remaining = MAX_STDERR_BYTES.saturating_sub(output.len());
+        output.extend_from_slice(&buffer[..bytes_read.min(remaining)]);
+    }
+    let mut output = String::from_utf8_lossy(&output).into_owned();
+    if output.len() > MAX_STDERR_BYTES {
+        let mut end = MAX_STDERR_BYTES;
+        while !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        output.truncate(end);
+    }
+    Ok(output.trim().to_owned())
 }
 
 fn io_error(code: &str, message: &str, error: impl std::fmt::Display) -> JobError {
@@ -220,6 +289,56 @@ fn cancelled_error() -> JobError {
     JobError {
         code: "cancelled".to_owned(),
         message: "The conversion was cancelled".to_owned(),
+        details: None,
+    }
+}
+
+fn destination_exists_error() -> JobError {
+    JobError {
+        code: "destination_exists".to_owned(),
+        message: "The output destination already exists".to_owned(),
+        details: None,
+    }
+}
+
+fn validate_plan_arguments(execution: &JobExecution) -> Result<Vec<OsString>, JobError> {
+    let args = &execution.plan.ffmpeg_args;
+    let input_positions = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| (argument == OsStr::new("-i")).then_some(index))
+        .collect::<Vec<_>>();
+    if input_positions.len() != 1 {
+        return Err(invalid_arguments_error(
+            "The conversion plan must contain exactly one -i argument",
+        ));
+    }
+    let input_index = input_positions[0];
+    let input_path = args.get(input_index + 1).ok_or_else(|| {
+        invalid_arguments_error("The conversion plan -i argument is missing its path")
+    })?;
+    if PathBuf::from(input_path) != PathBuf::from(&execution.job.source_path) {
+        return Err(invalid_arguments_error(
+            "The conversion plan input path does not match the typed source path",
+        ));
+    }
+    let output_path = args
+        .last()
+        .ok_or_else(|| invalid_arguments_error("The conversion plan is missing its output path"))?;
+    if PathBuf::from(output_path) != execution.plan.output_path {
+        return Err(invalid_arguments_error(
+            "The conversion plan output path does not match the typed destination",
+        ));
+    }
+    let mut args = args.clone();
+    args.pop();
+    Ok(args)
+}
+
+fn invalid_arguments_error(message: &str) -> JobError {
+    JobError {
+        code: "invalid_ffmpeg_arguments".to_owned(),
+        message: message.to_owned(),
         details: None,
     }
 }
@@ -262,7 +381,7 @@ mod tests {
     use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
     use crate::media::planner::ConversionPlan;
 
-    use super::{CancellationToken, FfmpegRunner, JobExecution};
+    use super::{CancellationToken, FfmpegRunner, JobExecution, MAX_STDERR_BYTES};
 
     fn fixture_directory(name: &str) -> PathBuf {
         let directory = std::env::temp_dir().join(format!(
@@ -424,6 +543,107 @@ mod tests {
         assert_eq!(error.code, "cancelled");
         assert!(!output.exists());
         assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 2);
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn rejects_existing_destination_without_overwriting_it() {
+        let directory = fixture_directory("destination-exists");
+        let program = fake_program(
+            &directory,
+            "out=\"\"; for arg in \"$@\"; do out=\"$arg\"; done; printf 'replacement' > \"$out\"",
+        );
+        let execution = execution(&directory);
+        let output = execution.plan.output_path.clone();
+        fs::write(&output, b"original").expect("existing output should be writable");
+
+        let error = FfmpegRunner::new(program)
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("existing destination should be rejected");
+
+        assert_eq!(error.code, "destination_exists");
+        assert_eq!(fs::read(output).expect("existing output should remain"), b"original");
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn rejects_mismatched_typed_source_before_spawning() {
+        let directory = fixture_directory("source-mismatch");
+        let mut execution = execution(&directory);
+        execution.plan.ffmpeg_args[1] = directory
+            .join("other.wav")
+            .to_string_lossy()
+            .into_owned()
+            .into();
+
+        let error = FfmpegRunner::new(directory.join("missing-ffmpeg"))
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("mismatched source should be rejected");
+
+        assert_eq!(error.code, "invalid_ffmpeg_arguments");
+        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 1);
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn rejects_mismatched_typed_destination_before_spawning() {
+        let directory = fixture_directory("destination-mismatch");
+        let mut execution = execution(&directory);
+        *execution.plan.ffmpeg_args.last_mut().expect("output argument should exist") = directory
+            .join("other.flac")
+            .to_string_lossy()
+            .into_owned()
+            .into();
+
+        let error = FfmpegRunner::new(directory.join("missing-ffmpeg"))
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("mismatched destination should be rejected");
+
+        assert_eq!(error.code, "invalid_ffmpeg_arguments");
+        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 1);
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn reports_ffmpeg_spawn_failure() {
+        let directory = fixture_directory("spawn-failure");
+        let execution = execution(&directory);
+        let error = FfmpegRunner::new(directory.join("missing-ffmpeg"))
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("missing FFmpeg should fail to spawn");
+
+        assert_eq!(error.code, "ffmpeg_spawn_failed");
+        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 1);
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn reports_progress_output_errors() {
+        let directory = fixture_directory("output-failure");
+        let program = fake_program(&directory, "printf '\\377'; exit 0");
+        let execution = execution(&directory);
+        let error = FfmpegRunner::new(program)
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("invalid progress output should fail");
+
+        assert_eq!(error.code, "ffmpeg_output_failed");
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn caps_stored_ffmpeg_stderr() {
+        let directory = fixture_directory("stderr-cap");
+        let program = fake_program(
+            &directory,
+            "printf '%050000d' 0 >&2; exit 9",
+        );
+        let execution = execution(&directory);
+        let error = FfmpegRunner::new(program)
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("fake FFmpeg should fail");
+
+        assert_eq!(error.code, "ffmpeg_failed");
+        assert!(error.details.expect("stderr should be retained").len() <= MAX_STDERR_BYTES);
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 }

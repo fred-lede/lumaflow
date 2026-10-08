@@ -14,6 +14,9 @@ pub struct TempOutput {
 impl TempOutput {
     pub fn create(final_path: impl AsRef<Path>) -> io::Result<Self> {
         let final_path = final_path.as_ref().to_owned();
+        if destination_exists(&final_path)? {
+            return Err(destination_exists_error());
+        }
         let directory = final_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(directory)?;
         let stem = final_path
@@ -63,12 +66,18 @@ impl TempOutput {
     }
 
     pub fn commit(mut self) -> io::Result<PathBuf> {
+        if destination_exists(&self.final_path)? {
+            return Err(destination_exists_error());
+        }
         let file = match self.file.take() {
             Some(file) => file,
             None => OpenOptions::new().read(true).write(true).open(&self.path)?,
         };
         file.sync_all()?;
         drop(file);
+        if destination_exists(&self.final_path)? {
+            return Err(destination_exists_error());
+        }
         fs::rename(&self.path, &self.final_path)?;
         Ok(self.final_path.clone())
     }
@@ -76,6 +85,21 @@ impl TempOutput {
     pub fn cleanup(mut self) -> io::Result<()> {
         self.file.take();
         remove_if_present(&self.path)
+    }
+}
+
+fn destination_exists_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "the final output destination already exists",
+    )
+}
+
+fn destination_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -157,5 +181,33 @@ mod tests {
 
         assert!(!temp_path.exists());
         assert!(!final_path.exists());
+    }
+
+    #[test]
+    fn refuses_to_create_when_final_destination_already_exists() {
+        let directory = destination();
+        let final_path = directory.join("already-exists.flac");
+        fs::write(&final_path, b"original").expect("existing output should be writable");
+
+        let error = match TempOutput::create(&final_path) {
+            Ok(_) => panic!("existing output should reject creation"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(final_path).expect("existing output should remain"), b"original");
+    }
+
+    #[test]
+    fn refuses_to_commit_over_a_destination_created_after_temp_allocation() {
+        let directory = destination();
+        let final_path = directory.join("destination-race.flac");
+        let temp = TempOutput::create(&final_path).expect("temp should be created");
+        fs::write(&final_path, b"original").expect("destination should be created");
+
+        let error = temp.commit().expect_err("commit should not replace destination");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(final_path).expect("existing output should remain"), b"original");
     }
 }

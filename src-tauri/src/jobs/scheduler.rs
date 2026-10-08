@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -13,22 +13,73 @@ pub const DEFAULT_CONCURRENCY: usize = 1;
 
 #[derive(Debug, Clone)]
 pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
+    state: Arc<Mutex<CancellationState>>,
+}
+
+#[derive(Debug, Default)]
+struct CancellationState {
+    requested: bool,
+    commit_started: bool,
 }
 
 impl CancellationToken {
     pub fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            state: Arc::new(Mutex::new(CancellationState::default())),
         }
     }
 
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+    pub fn cancel(&self) -> bool {
+        let mut state = self.state.lock().expect("cancellation lock should succeed");
+        if state.commit_started {
+            return false;
+        }
+        state.requested = true;
+        true
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.state
+            .lock()
+            .expect("cancellation lock should succeed")
+            .requested
+    }
+
+    pub(crate) fn begin_commit(&self) -> Result<CommitGuard, ()> {
+        let mut state = self.state.lock().expect("cancellation lock should succeed");
+        if state.requested || state.commit_started {
+            return Err(());
+        }
+        state.commit_started = true;
+        Ok(CommitGuard {
+            token: self.clone(),
+            finished: false,
+        })
+    }
+
+    fn finish_commit(&self) {
+        let state = self.state.lock().expect("cancellation lock should succeed");
+        drop(state);
+    }
+}
+
+pub(crate) struct CommitGuard {
+    token: CancellationToken,
+    finished: bool,
+}
+
+impl CommitGuard {
+    pub(crate) fn finish(mut self, _committed: bool) {
+        self.token.finish_commit();
+        self.finished = true;
+    }
+}
+
+impl Drop for CommitGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.token.finish_commit();
+        }
     }
 }
 
@@ -56,13 +107,29 @@ pub trait JobExecutor: Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerError {
     DuplicateJob,
+    DestinationConflict,
     JobNotFound,
     InvalidState,
     InvalidConcurrency,
+    CancellationRejected,
+}
+
+impl SchedulerError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::DuplicateJob => "duplicate_job",
+            Self::DestinationConflict => "destination_conflict",
+            Self::JobNotFound => "job_not_found",
+            Self::InvalidState => "invalid_state",
+            Self::InvalidConcurrency => "invalid_concurrency",
+            Self::CancellationRejected => "cancellation_rejected",
+        }
+    }
 }
 
 struct JobRecord {
     execution: JobExecution,
+    destination: PathBuf,
 }
 
 struct RunningJob {
@@ -95,7 +162,18 @@ impl Scheduler {
     }
 
     pub fn new(executor: Arc<dyn JobExecutor>, max_concurrency: usize) -> Self {
-        let worker_count = max_concurrency.max(DEFAULT_CONCURRENCY);
+        Self::try_new(executor, max_concurrency)
+            .expect("scheduler concurrency must be greater than zero")
+    }
+
+    pub fn try_new(
+        executor: Arc<dyn JobExecutor>,
+        max_concurrency: usize,
+    ) -> Result<Self, SchedulerError> {
+        if max_concurrency == 0 {
+            return Err(SchedulerError::InvalidConcurrency);
+        }
+        let worker_count = max_concurrency;
         let shared = Arc::new(Shared {
             state: Mutex::new(SchedulerState {
                 jobs: HashMap::new(),
@@ -116,10 +194,10 @@ impl Scheduler {
             workers.push(thread::spawn(move || worker_loop(shared, executor)));
         }
 
-        Self {
+        Ok(Self {
             shared,
             workers: Mutex::new(workers),
-        }
+        })
     }
 
     pub fn set_event_sink(&self, event_sink: EventSink) {
@@ -152,9 +230,23 @@ impl Scheduler {
             if state.jobs.contains_key(&job_id) {
                 return Err(SchedulerError::DuplicateJob);
             }
+            let destination = canonical_destination(&execution.plan.output_path);
+            if state
+                .jobs
+                .values()
+                .any(|record| record.destination == destination)
+            {
+                return Err(SchedulerError::DestinationConflict);
+            }
             state.order.push(job_id.clone());
             state.pending.push_back(job_id.clone());
-            state.jobs.insert(job_id, JobRecord { execution });
+            state.jobs.insert(
+                job_id,
+                JobRecord {
+                    execution,
+                    destination,
+                },
+            );
             Arc::clone(&state.event_sink)
         };
         sink(event);
@@ -189,8 +281,10 @@ impl Scheduler {
                 .lock()
                 .expect("scheduler state lock should succeed");
             if let Some(running) = state.running.get(job_id) {
-                running.cancellation.cancel();
-                return Ok(());
+                if running.cancellation.cancel() {
+                    return Ok(());
+                }
+                return Err(SchedulerError::CancellationRejected);
             }
 
             let record = state.jobs.get_mut(job_id).ok_or(SchedulerError::JobNotFound)?;
@@ -438,6 +532,36 @@ fn processing_state(kind: &ProcessingKind) -> JobState {
     }
 }
 
+fn canonical_destination(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map(|directory| directory.join(path))
+            .unwrap_or_else(|_| path.to_owned())
+    };
+    let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
+    let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| lexical_path(parent));
+    parent.join(absolute.file_name().unwrap_or_default())
+}
+
+fn lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir | Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -566,6 +690,32 @@ mod tests {
         }
     }
 
+    struct CommitExecutor {
+        started: Mutex<Option<mpsc::Sender<String>>>,
+        gate: Arc<Gate>,
+    }
+
+    impl JobExecutor for CommitExecutor {
+        fn execute(
+            &self,
+            execution: JobExecution,
+            cancellation: CancellationToken,
+            _emit: super::EventSink,
+        ) -> Result<(), JobError> {
+            let commit = cancellation.begin_commit().expect("commit should begin");
+            self.started
+                .lock()
+                .expect("started lock should succeed")
+                .as_ref()
+                .expect("started sender should exist")
+                .send(execution.job.id)
+                .expect("test receiver should be alive");
+            self.gate.wait(&CancellationToken::new());
+            commit.finish(true);
+            Ok(())
+        }
+    }
+
     fn job(id: &str) -> QueueJob {
         QueueJob {
             id: id.to_owned(),
@@ -678,6 +828,66 @@ mod tests {
             "default-one"
         );
         assert!(started_rx.recv_timeout(Duration::from_millis(40)).is_err());
+
+        gate.release();
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn fallible_constructor_rejects_zero_concurrency() {
+        assert!(matches!(
+            Scheduler::try_new(RecordingExecutor::immediate(), 0),
+            Err(SchedulerError::InvalidConcurrency)
+        ));
+    }
+
+    #[test]
+    fn cancellation_during_commit_is_rejected_and_job_completes() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let gate = Arc::new(Gate::new());
+        let executor = Arc::new(CommitExecutor {
+            started: Mutex::new(Some(started_tx)),
+            gate: Arc::clone(&gate),
+        });
+        let scheduler = Scheduler::with_default_concurrency(executor);
+        scheduler
+            .enqueue(execution("commit-race"))
+            .expect("job should enqueue");
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("commit should begin");
+
+        assert_eq!(
+            scheduler.cancel("commit-race"),
+            Err(SchedulerError::CancellationRejected)
+        );
+        gate.release();
+        assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
+        assert!(matches!(
+            scheduler.snapshot().jobs[0].state,
+            JobState::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_same_destination_for_distinct_jobs_even_with_multiple_workers() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let gate = Arc::new(Gate::new());
+        let executor = RecordingExecutor::blocking(started_tx, Arc::clone(&gate));
+        let scheduler = scheduler(executor, 2);
+        scheduler
+            .enqueue(execution("destination-owner"))
+            .expect("first job should enqueue");
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first job should start");
+
+        let mut conflicting = execution("destination-conflict");
+        conflicting.plan.output_path = PathBuf::from("/output/./destination-owner.flac");
+        assert_eq!(
+            scheduler.enqueue(conflicting),
+            Err(SchedulerError::DestinationConflict)
+        );
 
         gate.release();
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
