@@ -120,6 +120,20 @@ mod tests {
     }
 
     #[test]
+    fn real_style_mp4_container_can_remux_to_mp4_when_streams_are_compatible() {
+        let mut media = mp4_media();
+        media.container = "mov,mp4,m4a,3gp,3g2,mj2".to_owned();
+
+        let plan = plan_conversion(&media, &settings(OutputFormat::Mp4))
+            .expect("real-style MP4 container should remux");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::LosslessRemux { .. }
+        ));
+    }
+
+    #[test]
     fn remux_maps_multiple_audio_tracks_and_subtitles_explicitly() {
         let plan = plan_conversion(&multi_audio_mp4(), &settings(OutputFormat::Mp4))
             .expect("compatible multi-track MP4 should remux");
@@ -236,6 +250,28 @@ mod tests {
     }
 
     #[test]
+    fn webm_with_video_settings_is_unsupported_without_an_invalid_codec_plan() {
+        let mut output = settings(OutputFormat::Webm);
+        output.width = Some(1280);
+
+        let error = plan_conversion(&mp4_media(), &output)
+            .expect_err("WebM codec mapping is not proven by the conservative planner");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
+    fn avi_with_video_settings_is_unsupported_without_an_invalid_codec_plan() {
+        let mut output = settings(OutputFormat::Avi);
+        output.frame_rate = Some("25/1".to_owned());
+
+        let error = plan_conversion(&mp4_media(), &output)
+            .expect_err("AVI codec mapping is not proven by the conservative planner");
+
+        assert_eq!(error.code, "unsupported_conversion");
+    }
+
+    #[test]
     fn incompatible_source_streams_return_structured_error() {
         let mut media = mp4_media();
         media.video_streams[0].codec = "hevc".to_owned();
@@ -311,7 +347,11 @@ pub fn plan_conversion(
             } else {
                 ArgumentMode::TranscodeAll
             }),
-        format if is_known_output(format) && has_stream_setting_changes(settings) => {
+        format
+            if is_known_output(format)
+                && has_stream_setting_changes(settings)
+                && can_transcode_to(media, format) =>
+        {
             require_media_stream(media)?;
             ProcessingMode::Transcoding(if format.is_audio_only() {
                 ArgumentMode::FirstAudio
@@ -388,7 +428,15 @@ fn output_path(media: &MediaInfo, settings: &OutputSettings) -> Result<PathBuf, 
 }
 
 fn normalized_container(container: &str) -> &str {
-    container.split(',').next().unwrap_or(container)
+    if container
+        .split(',')
+        .map(str::trim)
+        .any(|name| name.eq_ignore_ascii_case("mp4"))
+    {
+        "mp4"
+    } else {
+        container.split(',').next().unwrap_or(container).trim()
+    }
 }
 
 fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
@@ -483,6 +531,23 @@ fn is_known_output(format: &OutputFormat) -> bool {
             | OutputFormat::Flac
             | OutputFormat::Ogg
     )
+}
+
+fn can_transcode_to(media: &MediaInfo, format: &OutputFormat) -> bool {
+    let has_video = !media.video_streams.is_empty();
+    let has_audio = !media.audio_streams.is_empty();
+    let has_subtitles = !media.subtitle_streams.is_empty();
+
+    match format {
+        OutputFormat::Mp4 | OutputFormat::Mov | OutputFormat::Mkv => {
+            !has_subtitles && (has_video || has_audio)
+        }
+        OutputFormat::M4a | OutputFormat::Wav | OutputFormat::Flac => {
+            !has_video && !has_subtitles && has_audio
+        }
+        OutputFormat::Mp3 => !has_subtitles && has_audio,
+        OutputFormat::Webm | OutputFormat::Avi | OutputFormat::Ogg => false,
+    }
 }
 
 trait OutputFormatExt {

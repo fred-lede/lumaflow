@@ -70,7 +70,7 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
     })?;
 
     let format = required_object(&document, "format")?;
-    let container = required_string(format, "format_name")?;
+    let container = normalize_container_name(&required_string(format, "format_name")?);
     let duration_seconds = required_f64(format, "duration")?;
     let size_bytes = required_u64(format, "size")?;
     let streams = document
@@ -201,6 +201,23 @@ fn invalid_field(field: &str) -> MediaError {
     )
 }
 
+fn normalize_container_name(format_name: &str) -> String {
+    let names = format_name
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+
+    if names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("mp4"))
+    {
+        "mp4".to_owned()
+    } else {
+        names.first().unwrap_or(&format_name).to_ascii_lowercase()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -211,6 +228,16 @@ mod tests {
     const MP4_JSON: &str = r#"
     {
       "format": {"format_name":"mp4","duration":"12.500000","size":"4096"},
+      "streams": [
+        {"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"r_frame_rate":"30000/1001"},
+        {"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2}
+      ]
+    }
+    "#;
+
+    const REAL_STYLE_MP4_JSON: &str = r#"
+    {
+      "format": {"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"12.500000","size":"4096"},
       "streams": [
         {"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"r_frame_rate":"30000/1001"},
         {"index":1,"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2}
@@ -313,6 +340,17 @@ mod tests {
         assert_eq!(runner.calls.borrow().len(), 1);
         assert_eq!(runner.calls.borrow()[0].0, "ffprobe");
         assert_eq!(runner.calls.borrow()[0].1.last(), Some(&"/input/movie.mp4".to_owned()));
+    }
+
+    #[test]
+    fn normalizes_real_style_mp4_format_name_to_mp4_container() {
+        let actual = probe_media(
+            &FakeRunner::successful(REAL_STYLE_MP4_JSON),
+            "/input/movie.mp4",
+        )
+        .expect("real-style MP4 metadata should probe");
+
+        assert_eq!(actual.container, "mp4");
     }
 
     #[test]
