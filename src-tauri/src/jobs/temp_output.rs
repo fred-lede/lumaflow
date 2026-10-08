@@ -65,21 +65,35 @@ impl TempOutput {
         self.file.take();
     }
 
-    pub fn commit(mut self) -> io::Result<PathBuf> {
-        if destination_exists(&self.final_path)? {
-            return Err(destination_exists_error());
-        }
+    pub fn commit(self) -> io::Result<PathBuf> {
+        self.commit_inner(None::<fn()>)
+    }
+
+    fn commit_inner<F: FnOnce()>(mut self, before_publish: Option<F>) -> io::Result<PathBuf> {
         let file = match self.file.take() {
             Some(file) => file,
             None => OpenOptions::new().read(true).write(true).open(&self.path)?,
         };
         file.sync_all()?;
         drop(file);
-        if destination_exists(&self.final_path)? {
-            return Err(destination_exists_error());
+        if let Some(before_publish) = before_publish {
+            before_publish();
         }
-        fs::rename(&self.path, &self.final_path)?;
+
+        match fs::hard_link(&self.path, &self.final_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(destination_exists_error());
+            }
+            Err(error) => return Err(error),
+        }
+        remove_if_present(&self.path)?;
         Ok(self.final_path.clone())
+    }
+
+    #[cfg(test)]
+    fn commit_for_test(self, before_publish: impl FnOnce()) -> io::Result<PathBuf> {
+        self.commit_inner(Some(before_publish))
     }
 
     pub fn cleanup(mut self) -> io::Result<()> {
@@ -153,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_syncs_renames_and_removes_temp_path() {
+    fn commit_syncs_publishes_and_removes_temp_path() {
         let directory = destination();
         let final_path = directory.join("committed.flac");
         let temp_path = {
@@ -203,11 +217,16 @@ mod tests {
         let directory = destination();
         let final_path = directory.join("destination-race.flac");
         let temp = TempOutput::create(&final_path).expect("temp should be created");
-        fs::write(&final_path, b"original").expect("destination should be created");
+        let temp_path = temp.path().to_owned();
 
-        let error = temp.commit().expect_err("commit should not replace destination");
+        let error = temp
+            .commit_for_test(|| {
+                fs::write(&final_path, b"original").expect("destination should be created");
+            })
+            .expect_err("commit should not replace destination");
 
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read(final_path).expect("existing output should remain"), b"original");
+        assert!(!temp_path.exists());
     }
 }
