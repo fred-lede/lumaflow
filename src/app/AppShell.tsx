@@ -14,7 +14,7 @@ import QueuePanel from "../features/queue/QueuePanel";
 import { useQueueEvents } from "../features/queue/useQueueEvents";
 import OutputSettings from "../features/settings/OutputSettings";
 import { useConversionSettings } from "../features/settings/useConversionSettings";
-import { enqueueJobs, LumaFlowError, selectOutputFolder } from "../shared/tauri";
+import { LumaFlowError, selectOutputFolder } from "../shared/tauri";
 import GlassPanel from "../ui/GlassPanel";
 import StatusBadge from "../ui/StatusBadge";
 
@@ -31,11 +31,7 @@ export const AppShell: FC = () => {
   const queue = useQueueEvents();
   const intakeAdapter = useMemo(
     () => ({
-      enqueueJobs: async (...args: Parameters<typeof enqueueJobs>) => {
-        const snapshot = await enqueueJobs(...args);
-        queue.controller.applySnapshot(snapshot);
-        return snapshot;
-      },
+      enqueueJobs: queue.controller.enqueueJobs,
     }),
     [queue.controller],
   );

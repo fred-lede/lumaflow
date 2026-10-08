@@ -2,10 +2,11 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import type { JobEvent, QueueJob, QueueSnapshot } from "../../domain/job";
+import type { EnqueueJobRequest, JobEvent, QueueJob, QueueSnapshot } from "../../domain/job";
 import {
   cancelJob,
   clearCompleted,
+  enqueueJobs,
   LumaFlowError,
   openOutputFolder,
   pauseAll,
@@ -43,6 +44,7 @@ export type QueueEventAdapter = {
 export type QueueCommandAdapter = {
   cancelJob: typeof cancelJob;
   clearCompleted: typeof clearCompleted;
+  enqueueJobs: typeof enqueueJobs;
   openOutputFolder: typeof openOutputFolder;
   pauseAll: typeof pauseAll;
   reorderJobs: typeof reorderJobs;
@@ -54,6 +56,7 @@ export type QueueController = {
   applySnapshot: (snapshot: QueueSnapshot) => void;
   cancelJob: (jobId: string) => Promise<QueueSnapshot>;
   clearCompleted: () => Promise<QueueSnapshot>;
+  enqueueJobs: (requests: EnqueueJobRequest[]) => Promise<QueueSnapshot>;
   getState: () => QueueClientState;
   handleEvent: (event: JobEvent) => void;
   moveJob: (jobId: string, direction: "up" | "down") => Promise<QueueSnapshot>;
@@ -77,6 +80,7 @@ const defaultEventAdapter: QueueEventAdapter = {
 const defaultCommandAdapter: QueueCommandAdapter = {
   cancelJob,
   clearCompleted,
+  enqueueJobs,
   openOutputFolder,
   pauseAll,
   reorderJobs,
@@ -417,6 +421,11 @@ export function createQueueController(options: {
     applySnapshot: store.applySnapshot,
     cancelJob: (jobId) => runSnapshotMutation("cancel", [jobId], "cancel", () => commands.cancelJob(jobId)),
     clearCompleted: () => runGlobalSnapshotMutation("clear", () => commands.clearCompleted()),
+    enqueueJobs: (requests) => enqueueMutation({
+      label: "enqueue",
+      execute: () => commands.enqueueJobs(requests),
+      apply: (snapshot) => store.applySnapshot(snapshot),
+    }),
     getState: store.getState,
     handleEvent: store.handleEvent,
     moveJob,

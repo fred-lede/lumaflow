@@ -13,6 +13,11 @@ export type QueuePanelProps = {
   controller?: QueueController;
 };
 
+export type QueueAnnouncement = {
+  sequence: number;
+  text: string;
+};
+
 function jobName(job: { media: { fileName: string }; sourcePath: string; id: string }): string {
   return job.media.fileName || job.sourcePath.split(/[\\/]/).at(-1) || job.id;
 }
@@ -44,11 +49,15 @@ export function queueTransitionAnnouncement(job: QueueJob, previousState?: strin
   return null;
 }
 
+export function nextQueueAnnouncement(current: QueueAnnouncement, text: string): QueueAnnouncement {
+  return { text, sequence: current.sequence + 1 };
+}
+
 export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController }) => {
   const { controller, state } = useQueueEvents({ controller: providedController });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<TechnicalError | null>(null);
-  const [announcement, setAnnouncement] = useState("");
+  const [announcement, setAnnouncement] = useState<QueueAnnouncement>({ sequence: 0, text: "" });
   const previousStates = useRef(new Map<string, string>());
   const jobs = state.order
     .map((jobId) => state.jobsById[jobId])
@@ -72,7 +81,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
       }
     }
     if (messages.length > 0) {
-      setAnnouncement(messages.join(" "));
+      setAnnouncement((current) => nextQueueAnnouncement(current, messages.join(" ")));
     }
   }, [jobs, state.jobsById]);
 
@@ -205,8 +214,14 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
         </ol>
       )}
 
-      <div className="sr-only" aria-live="polite" aria-atomic="true">
-        {announcement}
+      <div
+        key={announcement.sequence}
+        className="sr-only"
+        data-announcement-sequence={announcement.sequence}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {announcement.text}
       </div>
     </GlassPanel>
   );

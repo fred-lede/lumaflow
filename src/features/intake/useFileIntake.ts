@@ -4,7 +4,6 @@ import type { EnqueueJobRequest } from "../../domain/job";
 import type { MediaInfo, OutputSettings } from "../../domain/media";
 import {
   analyzeFiles,
-  enqueueJobs,
   LumaFlowError,
   registerFileDropHandler,
   selectFiles,
@@ -34,11 +33,17 @@ export type FileIntakeAdapter = {
   selectFiles: SelectFiles;
 };
 
-const defaultAdapter: FileIntakeAdapter = {
+const defaultAdapter: Omit<FileIntakeAdapter, "enqueueJobs"> = {
   analyzeFiles,
-  enqueueJobs,
   registerFileDropHandler,
   selectFiles,
+};
+
+const missingQueueCoordinator: EnqueueJobs = async () => {
+  throw new LumaFlowError(
+    "queue_coordinator_missing",
+    "Queue coordinator is required before files can be enqueued",
+  );
 };
 
 export type EnqueueSourceResult = {
@@ -47,6 +52,14 @@ export type EnqueueSourceResult = {
 };
 
 const emptyAdapterOverrides: Partial<FileIntakeAdapter> = {};
+
+function resolveAdapter(overrides: Partial<FileIntakeAdapter>): FileIntakeAdapter {
+  return {
+    ...defaultAdapter,
+    ...overrides,
+    enqueueJobs: overrides.enqueueJobs ?? missingQueueCoordinator,
+  };
+}
 
 export function normalizeSelectedPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -183,7 +196,7 @@ export type FileIntakeController = {
 export function createFileIntakeController(
   overrides: Partial<FileIntakeAdapter> = emptyAdapterOverrides,
 ): FileIntakeController {
-  const adapter = { ...defaultAdapter, ...overrides };
+  const adapter = resolveAdapter(overrides);
   const listeners = new Set<() => void>();
   const inFlightPaths = new Map<string, number>();
   const sourceRevisions = new Map<string, number>();
@@ -335,7 +348,7 @@ export function createFileIntakeController(
 
 export function useFileIntake(options: UseFileIntakeOptions = {}) {
   const overrides = options.adapter ?? emptyAdapterOverrides;
-  const adapter = useMemo(() => ({ ...defaultAdapter, ...overrides }), [overrides]);
+  const adapter = useMemo(() => resolveAdapter(overrides), [overrides]);
   const controller = useMemo(() => createFileIntakeController(adapter), [adapter]);
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 

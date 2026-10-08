@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { JobEvent, QueueJob, QueueSnapshot } from "../../domain/job";
 import { QueueRow } from "./QueueRow";
-import { QueuePanel, queueTransitionAnnouncement } from "./QueuePanel";
+import { QueuePanel, nextQueueAnnouncement, queueTransitionAnnouncement } from "./QueuePanel";
 import {
   createQueueController,
   createQueueStore,
@@ -127,6 +127,49 @@ describe("queue event store", () => {
 });
 
 describe("queue actions and accessible rendering", () => {
+  it("serializes enqueue behind pause, cancel, and reorder mutations", async () => {
+    let resolveEnqueue: ((value: QueueSnapshot) => void) | undefined;
+    let resolvePause: ((value: QueueSnapshot) => void) | undefined;
+    let resolveCancel: ((value: QueueSnapshot) => void) | undefined;
+    let resolveReorder: ((value: QueueSnapshot) => void) | undefined;
+    const commands = {
+      enqueueJobs: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveEnqueue = resolve; })),
+      pauseAll: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolvePause = resolve; })),
+      cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
+      reorderJobs: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveReorder = resolve; })),
+    };
+    const controller = createQueueController({ initialSnapshot: snapshot([job("one"), job("two")]), commands });
+
+    const enqueue = controller.enqueueJobs([]);
+    const pause = controller.pauseAll();
+    const cancel = controller.cancelJob("one");
+    const reorder = controller.moveJob("two", "up");
+
+    expect(controller.getState().pendingMutation).toBe("enqueue");
+    expect(commands.pauseAll).not.toHaveBeenCalled();
+    expect(commands.cancelJob).not.toHaveBeenCalled();
+    expect(commands.reorderJobs).not.toHaveBeenCalled();
+    await Promise.resolve();
+
+    resolveEnqueue?.(snapshot([job("one"), job("two")], 2));
+    await enqueue;
+    await Promise.resolve();
+    expect(commands.pauseAll).toHaveBeenCalledOnce();
+    resolvePause?.(snapshot([job("one"), job("two")], 3, true));
+    await pause;
+    await Promise.resolve();
+    expect(commands.cancelJob).toHaveBeenCalledWith("one");
+    resolveCancel?.(snapshot([job("one", { kind: "cancelled", label: "Cancelled" }), job("two")], 4, true));
+    await cancel;
+    await Promise.resolve();
+    expect(commands.reorderJobs).toHaveBeenCalledWith(["two", "one"]);
+    resolveReorder?.(snapshot([job("two"), job("one", { kind: "cancelled", label: "Cancelled" })], 5, true));
+    await reorder;
+
+    expect(controller.getState().order).toEqual(["two", "one"]);
+    expect(controller.getState().pendingMutation).toBeNull();
+  });
+
   it("wires global and row actions to typed command adapters", async () => {
     const commands: QueueCommandAdapter = {
       pauseAll: vi.fn(async () => snapshot([job("one")], 2, true)),
@@ -134,6 +177,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(async () => snapshot([job("one", { kind: "cancelled", label: "Cancelled" })])),
       retryJob: vi.fn(async () => snapshot([job("one")])) ,
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
     };
@@ -168,6 +212,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
       retryJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveRetry = resolve; })),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
     };
@@ -210,6 +255,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(async () => snapshot([])),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
     };
@@ -239,6 +285,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveReorder = resolve; })),
     };
@@ -271,6 +318,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(() => new Promise<QueueSnapshot>((_, reject) => { rejectReorder = reject; })),
     };
@@ -298,6 +346,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(async () => snapshot([])),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => {
         throw { code: "open_denied", message: "Open denied", details: "permission" };
       }),
@@ -320,6 +369,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(async () => snapshot([job("one")], 1)),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
     };
@@ -340,6 +390,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(async () => snapshot([])),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(() => new Promise<void>((resolve) => {
         resolveOpen = resolve;
       })),
@@ -368,6 +419,7 @@ describe("queue actions and accessible rendering", () => {
       cancelJob: vi.fn(async () => snapshot([])),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
+      enqueueJobs: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs,
     };
@@ -473,6 +525,14 @@ describe("queue actions and accessible rendering", () => {
     });
 
     expect(queueTransitionAnnouncement(completed, "transcoding")).toContain("Cleanup warning");
+  });
+
+  it("increments the live announcement nonce for repeated identical warnings", () => {
+    const first = nextQueueAnnouncement({ text: "", sequence: 0 }, "Cleanup warning");
+    const second = nextQueueAnnouncement(first, "Cleanup warning");
+
+    expect(first).toEqual({ text: "Cleanup warning", sequence: 1 });
+    expect(second).toEqual({ text: "Cleanup warning", sequence: 2 });
   });
 
   it("renders global pause, resume, and clear-completed controls with live announcements", () => {
