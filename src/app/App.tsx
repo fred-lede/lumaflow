@@ -1,7 +1,8 @@
+import "../styles/tokens.css";
+import "../styles/glass.css";
+
+import AppShell from "./AppShell";
+
 export function App() {
-  return (
-    <main aria-labelledby="app-title">
-      <h1 id="app-title">LumaFlow</h1>
-    </main>
-  );
+  return <AppShell />;
 }
