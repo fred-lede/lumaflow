@@ -1,0 +1,20 @@
+[package]
+name = "lumaflow"
+version = "0.1.0"
+description = "LumaFlow lossless-first media converter"
+authors = ["LumaFlow contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "lumaflow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.5", features = [] }
+tauri-plugin-dialog = "=2.7.3"
+tauri-plugin-fs = "=2.5.2"
