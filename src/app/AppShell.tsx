@@ -51,11 +51,11 @@ export const AppShell: FC = () => {
 
   const handleStartConversion = useCallback(async () => {
     setSettingsError(null);
-    const result = await intake.enqueue(conversion.outputSettings);
-    if (result.failed.length > 0) {
+    const result = await intake.start(conversion.outputSettings);
+    if (result?.failed.length) {
       setSettingsError("Some files could not be queued. Review the inline errors below.");
     }
-  }, [conversion.outputSettings, intake.enqueue]);
+  }, [conversion.outputSettings, intake.start]);
 
   const readySourceCount = intake.sources.filter((source) => source.status === "ready").length;
 
@@ -115,7 +115,7 @@ export const AppShell: FC = () => {
             <p className="supporting-text">
               Choose one or more files to inspect their format and duration before conversion.
             </p>
-            <DropZone isBusy={intake.isBusy} onSelectFiles={() => void intake.chooseFiles()} />
+            <DropZone pendingCount={intake.pendingCount} onSelectFiles={() => void intake.chooseFiles()} />
             <SourceFileList sources={intake.sources} onRemove={intake.removeSource} />
           </GlassPanel>
 
@@ -142,12 +142,16 @@ export const AppShell: FC = () => {
             />
             <div className="action-row">
               <span className="supporting-text">
-                {readySourceCount === 0 ? "Add an analyzed source to begin." : `${readySourceCount} source${readySourceCount === 1 ? "" : "s"} ready`}
+                {intake.pendingCount > 0
+                  ? `Analyzing ${intake.pendingCount} source${intake.pendingCount === 1 ? "" : "s"}…`
+                  : readySourceCount === 0
+                    ? "Add an analyzed source to begin."
+                    : `${readySourceCount} source${readySourceCount === 1 ? "" : "s"} ready`}
               </span>
               <button
                 className="button button--primary"
                 type="button"
-                disabled={intake.isBusy || readySourceCount === 0 || conversion.settings.outputDirectory.length === 0}
+                disabled={!intake.canStart || conversion.settings.outputDirectory.length === 0}
                 onClick={() => void handleStartConversion()}
               >
                 Start conversion

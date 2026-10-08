@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import type { EnqueueJobRequest } from "../../domain/job";
 import type { MediaInfo, OutputSettings } from "../../domain/media";
@@ -49,11 +49,21 @@ export type EnqueueSourceResult = {
 const emptyAdapterOverrides: Partial<FileIntakeAdapter> = {};
 
 export function normalizeSelectedPaths(paths: string[]): string[] {
-  const normalized = paths
-    .map((path) => path.trim())
-    .filter((path) => path.length > 0);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const path of paths) {
+    const trimmed = path.trim();
+    const key = canonicalPathKey(trimmed);
+    if (key.length > 0 && !seen.has(key)) {
+      seen.add(key);
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
+}
 
-  return normalized.filter((path, index) => normalized.indexOf(path) === index);
+export function canonicalPathKey(path: string): string {
+  return path.trim().replaceAll("\\", "/");
 }
 
 function stableHash(value: string): string {
@@ -66,7 +76,7 @@ function stableHash(value: string): string {
 }
 
 export function sourceIdForPath(path: string): string {
-  return `source-${stableHash(path)}`;
+  return `source-${stableHash(canonicalPathKey(path))}`;
 }
 
 export function removeSourceById(sources: SourceFile[], id: string): SourceFile[] {
@@ -152,94 +162,188 @@ export type UseFileIntakeOptions = {
   adapter?: Partial<FileIntakeAdapter>;
 };
 
-export function useFileIntake(options: UseFileIntakeOptions = {}) {
-  const overrides = options.adapter ?? emptyAdapterOverrides;
-  const adapter = useMemo(() => ({ ...defaultAdapter, ...overrides }), [overrides]);
-  const [sources, setSources] = useState<SourceFile[]>([]);
-  const [isBusy, setIsBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export type FileIntakeSnapshot = {
+  canStart: boolean;
+  enqueuePendingCount: number;
+  error: string | null;
+  pendingCount: number;
+  sources: SourceFile[];
+};
 
-  const addPaths = useCallback(
-    async (paths: string[]) => {
-      const normalizedPaths = normalizeSelectedPaths(paths);
-      if (normalizedPaths.length === 0) {
-        return [];
-      }
-      setError(null);
+export type FileIntakeController = {
+  addPaths: (paths: string[]) => Promise<SourceFile[]>;
+  chooseFiles: () => Promise<SourceFile[]>;
+  getState: () => FileIntakeSnapshot;
+  removeSource: (id: string) => void;
+  reportError: (error: unknown) => void;
+  start: (settings: OutputSettings) => Promise<EnqueueSourceResult | null>;
+  subscribe: (listener: () => void) => () => void;
+};
 
-      const existingPaths = new Set(sources.map((source) => source.path));
-      const newPaths = normalizedPaths.filter((path) => !existingPaths.has(path));
-      if (newPaths.length === 0) {
-        return [];
-      }
+export function createFileIntakeController(
+  overrides: Partial<FileIntakeAdapter> = emptyAdapterOverrides,
+): FileIntakeController {
+  const adapter = { ...defaultAdapter, ...overrides };
+  const listeners = new Set<() => void>();
+  const inFlightPaths = new Map<string, number>();
+  const sourceRevisions = new Map<string, number>();
+  let nextOperationId = 0;
+  let nextSourceRevision = 0;
+  let state: FileIntakeSnapshot = {
+    canStart: false,
+    enqueuePendingCount: 0,
+    error: null,
+    pendingCount: 0,
+    sources: [],
+  };
 
-      setSources((current) => [
-        ...current,
-        ...newPaths.map((path) => ({
-          id: sourceIdForPath(path),
-          path,
-          media: null,
-          status: "analyzing" as const,
-          error: null,
-        })),
-      ]);
-      setIsBusy(true);
-      const analyzed = await analyzeSourcePaths(newPaths, adapter.analyzeFiles);
-      setSources((current) => {
-        const analyzedById = new Map(analyzed.map((source) => [source.id, source]));
-        return current.map((source) => analyzedById.get(source.id) ?? source);
-      });
-      setIsBusy(false);
-      return analyzed;
-    },
-    [adapter.analyzeFiles, sources],
-  );
+  const emit = (): void => {
+    state = {
+      ...state,
+      canStart:
+        state.pendingCount === 0 &&
+        state.enqueuePendingCount === 0 &&
+        state.sources.some((source) => source.status === "ready" && source.media !== null),
+    };
+    for (const listener of listeners) {
+      listener();
+    }
+  };
 
-  const chooseFiles = useCallback(async () => {
+  const addPaths = async (paths: string[]): Promise<SourceFile[]> => {
+    const normalizedPaths = normalizeSelectedPaths(paths);
+    const existingKeys = new Set(state.sources.map((source) => canonicalPathKey(source.path)));
+    const newPaths = normalizedPaths.filter((path) => {
+      const key = canonicalPathKey(path);
+      return !existingKeys.has(key) && !inFlightPaths.has(key);
+    });
+    if (newPaths.length === 0) {
+      return [];
+    }
+
+    const operationId = ++nextOperationId;
+    const newSources = newPaths.map((path) => {
+      const id = sourceIdForPath(path);
+      sourceRevisions.set(id, ++nextSourceRevision);
+      inFlightPaths.set(canonicalPathKey(path), operationId);
+      return { id, path, media: null, status: "analyzing" as const, error: null };
+    });
+    state = {
+      ...state,
+      error: null,
+      pendingCount: state.pendingCount + newPaths.length,
+      sources: [...state.sources, ...newSources],
+    };
+    emit();
+
+    const analyzed = await analyzeSourcePaths(newPaths, adapter.analyzeFiles);
+    const applicable = analyzed.filter(
+      (source) => inFlightPaths.get(canonicalPathKey(source.path)) === operationId,
+    );
+    for (const source of applicable) {
+      inFlightPaths.delete(canonicalPathKey(source.path));
+    }
+    if (applicable.length > 0) {
+      const analyzedById = new Map(applicable.map((source) => [source.id, source]));
+      state = {
+        ...state,
+        pendingCount: Math.max(0, state.pendingCount - applicable.length),
+        sources: state.sources.map((source) => analyzedById.get(source.id) ?? source),
+      };
+      emit();
+    }
+    return analyzed;
+  };
+
+  const chooseFiles = async (): Promise<SourceFile[]> => {
     try {
       return addPaths(await adapter.selectFiles());
     } catch (selectionError) {
-      setError(LumaFlowError.from(selectionError).message);
+      state = { ...state, error: LumaFlowError.from(selectionError).message };
+      emit();
       return [];
     }
-  }, [adapter.selectFiles, addPaths]);
+  };
 
-  const removeSource = useCallback((id: string) => {
-    setSources((current) => removeSourceById(current, id));
-  }, []);
+  const removeSource = (id: string): void => {
+    const source = state.sources.find((candidate) => candidate.id === id);
+    if (!source) {
+      return;
+    }
+    const key = canonicalPathKey(source.path);
+    const wasPending = inFlightPaths.delete(key);
+    sourceRevisions.delete(id);
+    state = {
+      ...state,
+      pendingCount: Math.max(0, state.pendingCount - (wasPending ? 1 : 0)),
+      sources: removeSourceById(state.sources, id),
+    };
+    emit();
+  };
 
-  const enqueue = useCallback(
-    async (settings: OutputSettings) => {
-      setIsBusy(true);
-      const result = await enqueueSourceFiles(sources, settings, adapter.enqueueJobs);
-      setSources((current) => {
-        const failedById = new Map(result.failed.map((failure) => [failure.id, failure.error]));
-        return current
-          .filter((source) => !result.enqueuedIds.includes(source.id))
-          .map((source) => ({
-            ...source,
-            status: failedById.has(source.id) ? ("error" as const) : source.status,
-            error: failedById.get(source.id) ?? source.error,
-          }));
-      });
-      setIsBusy(false);
+  const reportError = (error: unknown): void => {
+    state = { ...state, error: LumaFlowError.from(error).message };
+    emit();
+  };
+
+  const start = async (settings: OutputSettings): Promise<EnqueueSourceResult | null> => {
+    if (!state.canStart) {
+      return null;
+    }
+
+    const candidates = state.sources.filter((source) => source.status === "ready" && source.media !== null);
+    const revisions = new Map(candidates.map((source) => [source.id, sourceRevisions.get(source.id)]));
+    state = { ...state, enqueuePendingCount: state.enqueuePendingCount + 1 };
+    emit();
+    try {
+      const result = await enqueueSourceFiles(candidates, settings, adapter.enqueueJobs);
+      const enqueued = new Set(result.enqueuedIds);
+      const failedById = new Map(result.failed.map((failure) => [failure.id, failure.error]));
+      state = {
+        ...state,
+        sources: state.sources
+          .filter((source) => !(enqueued.has(source.id) && sourceRevisions.get(source.id) === revisions.get(source.id)))
+          .map((source) => {
+            if (sourceRevisions.get(source.id) !== revisions.get(source.id)) {
+              return source;
+            }
+            const error = failedById.get(source.id);
+            return error ? { ...source, status: "error" as const, error } : source;
+          }),
+      };
+      emit();
       return result;
+    } finally {
+      state = { ...state, enqueuePendingCount: Math.max(0, state.enqueuePendingCount - 1) };
+      emit();
+    }
+  };
+
+  return {
+    addPaths,
+    chooseFiles,
+    getState: () => state,
+    removeSource,
+    reportError,
+    start,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
-    [adapter.enqueueJobs, sources],
-  );
+  };
+}
 
-  const addPathsRef = useRef(addPaths);
-
-  useEffect(() => {
-    addPathsRef.current = addPaths;
-  }, [addPaths]);
+export function useFileIntake(options: UseFileIntakeOptions = {}) {
+  const overrides = options.adapter ?? emptyAdapterOverrides;
+  const adapter = useMemo(() => ({ ...defaultAdapter, ...overrides }), [overrides]);
+  const controller = useMemo(() => createFileIntakeController(adapter), [adapter]);
+  const snapshot = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     let active = true;
-
     void adapter.registerFileDropHandler((paths) => {
-      void addPathsRef.current(paths);
+      void controller.addPaths(paths);
     }).then((unlisten) => {
       if (active) {
         cleanup = unlisten;
@@ -248,24 +352,21 @@ export function useFileIntake(options: UseFileIntakeOptions = {}) {
       }
     }).catch((registrationError: unknown) => {
       if (active) {
-        setError(LumaFlowError.from(registrationError).message);
+        controller.reportError(registrationError);
       }
     });
-
     return () => {
       active = false;
       cleanup?.();
     };
-  }, [adapter.registerFileDropHandler]);
+  }, [adapter.registerFileDropHandler, controller]);
 
   return {
-    addPaths,
-    chooseFiles,
-    enqueue,
-    error,
-    isBusy,
-    removeSource,
-    sources,
+    ...snapshot,
+    addPaths: controller.addPaths,
+    chooseFiles: controller.chooseFiles,
+    removeSource: controller.removeSource,
+    start: controller.start,
   };
 }
 

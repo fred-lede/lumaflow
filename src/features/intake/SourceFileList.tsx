@@ -21,6 +21,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
+export function fileNameForPath(path: string): string {
+  const segments = path.replaceAll("\\", "/").split("/");
+  return segments.at(-1) || "Unnamed file";
+}
+
 export const SourceFileList: FC<SourceFileListProps> = ({ sources, onRemove }) => {
   if (sources.length === 0) {
     return (
@@ -38,7 +43,7 @@ export const SourceFileList: FC<SourceFileListProps> = ({ sources, onRemove }) =
       {sources.map((source) => (
         <li className="source-list__item" key={source.id}>
           <div className="source-list__details">
-            <strong>{source.media?.fileName ?? source.path.split("/").at(-1) ?? source.path}</strong>
+            <strong>{source.media?.fileName ?? fileNameForPath(source.path)}</strong>
             {source.status === "analyzing" ? (
               <span className="source-list__meta">Analyzing media…</span>
             ) : source.status === "error" ? (
@@ -55,7 +60,7 @@ export const SourceFileList: FC<SourceFileListProps> = ({ sources, onRemove }) =
             className="icon-button"
             type="button"
             onClick={() => onRemove(source.id)}
-            aria-label={`Remove ${source.media?.fileName ?? source.path}`}
+            aria-label={`Remove ${source.media?.fileName ?? fileNameForPath(source.path)}`}
           >
             ×
           </button>

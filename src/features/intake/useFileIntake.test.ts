@@ -4,10 +4,12 @@ import type { EnqueueJobRequest } from "../../domain/job";
 import type { MediaInfo, OutputSettings } from "../../domain/media";
 import {
   analyzeSourcePaths,
+  createFileIntakeController,
   enqueueSourceFiles,
   normalizeSelectedPaths,
   removeSourceById,
   selectAndAnalyzeFiles,
+  sourceIdForPath,
 } from "./useFileIntake";
 
 function mediaFor(path: string): MediaInfo {
@@ -94,5 +96,84 @@ describe("useFileIntake operations", () => {
     expect(result.failed).toEqual([
       expect.objectContaining({ id: sources[1].id, error: "The output is not supported" }),
     ]);
+  });
+
+  it("keeps rapid drops deduplicated and pending until out-of-order analysis settles", async () => {
+    const deferred: Array<{
+      paths: string[];
+      resolve: (media: MediaInfo[]) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const analyze = vi.fn(
+      (paths: string[]) =>
+        new Promise<MediaInfo[]>((resolve, reject) => {
+          deferred.push({ paths, resolve, reject });
+        }),
+    );
+    const enqueue = vi.fn(async () => ({ jobs: [], paused: false }));
+    const controller = createFileIntakeController({ analyzeFiles: analyze, enqueueJobs: enqueue });
+
+    const firstDrop = controller.addPaths(["/media/one.mov"]);
+    const secondDrop = controller.addPaths(["/media/two.mp3"]);
+    controller.addPaths(["/media/two.mp3"]);
+
+    expect(controller.getState()).toMatchObject({ pendingCount: 2, canStart: false });
+    expect(controller.getState().sources).toHaveLength(2);
+
+    deferred[1].resolve([mediaFor("/media/two.mp3")]);
+    await secondDrop;
+    expect(controller.getState()).toMatchObject({ pendingCount: 1, canStart: false });
+    expect(controller.getState().sources).toContainEqual(
+      expect.objectContaining({ path: "/media/two.mp3", status: "ready" }),
+    );
+
+    const blockedStart = await controller.start(outputSettings);
+    expect(blockedStart).toBeNull();
+    expect(enqueue).not.toHaveBeenCalled();
+
+    controller.removeSource(sourceIdForPath("/media/one.mov"));
+    expect(controller.getState()).toMatchObject({ pendingCount: 0, canStart: true });
+
+    await controller.start(outputSettings);
+    expect(enqueue).toHaveBeenCalledWith([
+      expect.objectContaining({ sourcePath: "/media/two.mp3" }),
+    ]);
+
+    deferred[0].resolve([mediaFor("/media/one.mov")]);
+    await firstDrop;
+    expect(controller.getState().sources).not.toContainEqual(
+      expect.objectContaining({ path: "/media/one.mov" }),
+    );
+    expect(controller.getState().pendingCount).toBe(0);
+  });
+
+  it("does not let an older analysis overwrite a newer error for the same re-added path", async () => {
+    const deferred: Array<{
+      resolve: (media: MediaInfo[]) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const analyze = vi.fn(
+      () =>
+        new Promise<MediaInfo[]>((resolve, reject) => {
+          deferred.push({ resolve, reject });
+        }),
+    );
+    const controller = createFileIntakeController({ analyzeFiles: analyze });
+
+    const older = controller.addPaths(["/media/retry.mov"]);
+    controller.removeSource(sourceIdForPath("/media/retry.mov"));
+    const newer = controller.addPaths(["/media/retry.mov"]);
+
+    deferred[1].reject(new Error("new analysis failed"));
+    await newer;
+    expect(controller.getState().sources).toContainEqual(
+      expect.objectContaining({ path: "/media/retry.mov", status: "error", error: "new analysis failed" }),
+    );
+
+    deferred[0].resolve([mediaFor("/media/retry.mov")]);
+    await older;
+    expect(controller.getState().sources).toContainEqual(
+      expect.objectContaining({ path: "/media/retry.mov", status: "error", error: "new analysis failed" }),
+    );
   });
 });
