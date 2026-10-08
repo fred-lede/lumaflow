@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import type { MediaInfo } from "../domain/media";
 import type { EnqueueJobRequest, JobEvent, QueueSnapshot } from "../domain/job";
@@ -57,6 +59,14 @@ async function invokeLumaFlow<T>(command: string, args?: Record<string, unknown>
 
 export function selectFiles(): Promise<string[]> {
   return invokeLumaFlow<string[]>("select_files");
+}
+
+export function registerFileDropHandler(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  return getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop") {
+      handler(event.payload.paths);
+    }
+  });
 }
 
 export function selectOutputFolder(): Promise<string | null> {

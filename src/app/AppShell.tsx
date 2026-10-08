@@ -7,6 +7,12 @@ import {
   themeModeLabels,
   type ThemeMode,
 } from "./theme";
+import DropZone from "../features/intake/DropZone";
+import SourceFileList from "../features/intake/SourceFileList";
+import { useFileIntake } from "../features/intake/useFileIntake";
+import OutputSettings from "../features/settings/OutputSettings";
+import { useConversionSettings } from "../features/settings/useConversionSettings";
+import { LumaFlowError, selectOutputFolder } from "../shared/tauri";
 import GlassPanel from "../ui/GlassPanel";
 import StatusBadge from "../ui/StatusBadge";
 
@@ -19,6 +25,9 @@ export function handleSkipLinkActivation(
 
 export const AppShell: FC = () => {
   const [themeMode, setThemeMode] = useState<ThemeMode>("auto");
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const intake = useFileIntake();
+  const conversion = useConversionSettings();
 
   useEffect(() => {
     applyTheme(themeMode);
@@ -27,6 +36,28 @@ export const AppShell: FC = () => {
   const handleThemeChange = useCallback(() => {
     setThemeMode((currentMode) => nextThemeMode(currentMode));
   }, []);
+
+  const handleSelectOutputFolder = useCallback(async () => {
+    try {
+      const folder = await selectOutputFolder();
+      if (folder) {
+        conversion.setSettings({ outputDirectory: folder });
+        setSettingsError(null);
+      }
+    } catch (error) {
+      setSettingsError(LumaFlowError.from(error).message);
+    }
+  }, [conversion.setSettings]);
+
+  const handleStartConversion = useCallback(async () => {
+    setSettingsError(null);
+    const result = await intake.enqueue(conversion.outputSettings);
+    if (result.failed.length > 0) {
+      setSettingsError("Some files could not be queued. Review the inline errors below.");
+    }
+  }, [conversion.outputSettings, intake.enqueue]);
+
+  const readySourceCount = intake.sources.filter((source) => source.status === "ready").length;
 
   return (
     <div className="workspace-shell">
@@ -71,45 +102,56 @@ export const AppShell: FC = () => {
         </div>
 
         <div className="workspace-grid">
-          <GlassPanel className="workspace-card" labelledBy="settings-title" role="region">
+          <GlassPanel className="workspace-card" labelledBy="sources-title" role="region">
             <div className="card-heading">
               <div>
-                <p className="eyebrow">Configuration</p>
-                <h2 id="settings-title">Settings</h2>
+                <p className="eyebrow">Source media</p>
+                <h2 id="sources-title">Files</h2>
               </div>
               <span className="card-step" aria-hidden="true">
                 01
               </span>
             </div>
             <p className="supporting-text">
-              Output format and quality controls will appear here when files are added.
+              Choose one or more files to inspect their format and duration before conversion.
             </p>
-            <div className="empty-state">
-              <span className="empty-state__icon" aria-hidden="true">
-                ◌
-              </span>
-              <span>Waiting for source media</span>
-            </div>
+            <DropZone isBusy={intake.isBusy} onSelectFiles={() => void intake.chooseFiles()} />
+            <SourceFileList sources={intake.sources} onRemove={intake.removeSource} />
           </GlassPanel>
 
-          <GlassPanel className="workspace-card" labelledBy="queue-title" role="region">
+          <GlassPanel className="workspace-card" labelledBy="settings-title" role="region">
             <div className="card-heading">
               <div>
-                <p className="eyebrow">Batch processing</p>
-                <h2 id="queue-title">Queue</h2>
+                <p className="eyebrow">Configuration</p>
+                <h2 id="settings-title">Output settings</h2>
               </div>
               <span className="card-step" aria-hidden="true">
                 02
               </span>
             </div>
             <p className="supporting-text">
-              Conversion progress, recovery actions, and output details will be shown here.
+              Lossless-first is the default. Expand advanced settings only when the source needs a custom stream.
             </p>
-            <div className="empty-state">
-              <span className="empty-state__icon" aria-hidden="true">
-                ≡
+            <OutputSettings
+              advancedOpen={conversion.advancedOpen}
+              error={settingsError ?? intake.error}
+              settings={conversion.settings}
+              onChange={conversion.setSettings}
+              onSelectOutputFolder={() => void handleSelectOutputFolder()}
+              onToggleAdvanced={conversion.toggleAdvanced}
+            />
+            <div className="action-row">
+              <span className="supporting-text">
+                {readySourceCount === 0 ? "Add an analyzed source to begin." : `${readySourceCount} source${readySourceCount === 1 ? "" : "s"} ready`}
               </span>
-              <span>No conversions queued</span>
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={intake.isBusy || readySourceCount === 0 || conversion.settings.outputDirectory.length === 0}
+                onClick={() => void handleStartConversion()}
+              >
+                Start conversion
+              </button>
             </div>
           </GlassPanel>
         </div>
