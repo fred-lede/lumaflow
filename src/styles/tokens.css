@@ -107,6 +107,13 @@
 
 @media (prefers-contrast: more) {
   :root {
+    --color-canvas-glow: var(--color-canvas);
+    --color-surface: var(--color-surface-solid);
+    --color-surface-raised: var(--color-surface-solid);
+    --color-accent-soft: var(--color-surface-solid);
+    --color-success-soft: var(--color-surface-solid);
+    --color-danger-soft: var(--color-surface-solid);
+    --color-warning-soft: var(--color-surface-solid);
     --color-border: currentColor;
     --color-border-strong: currentColor;
     --color-text-muted: var(--color-text);

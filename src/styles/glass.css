@@ -30,7 +30,8 @@ button:focus-visible,
 a:focus-visible,
 select:focus-visible,
 input:focus-visible,
-[tabindex="0"]:focus-visible {
+[tabindex="0"]:focus-visible,
+main:focus-visible {
   outline: var(--focus-ring-width) solid var(--color-focus);
   outline-offset: var(--focus-ring-offset);
 }
@@ -308,6 +309,10 @@ h2 {
     background: var(--color-surface-solid);
     backdrop-filter: none;
   }
+
+  .theme-toggle:hover {
+    background: var(--color-surface-solid);
+  }
 }
 
 @media (forced-colors: active) {
@@ -325,6 +330,10 @@ h2 {
     background: var(--color-surface-solid);
     box-shadow: none;
     forced-color-adjust: auto;
+  }
+
+  .theme-toggle:hover {
+    background: var(--color-surface-solid);
   }
 
   .status-badge__icon,

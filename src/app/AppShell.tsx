@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { FC } from "react";
+import type { FC, MouseEvent as ReactMouseEvent } from "react";
 
 import {
   applyTheme,
@@ -9,6 +9,13 @@ import {
 } from "./theme";
 import GlassPanel from "../ui/GlassPanel";
 import StatusBadge from "../ui/StatusBadge";
+
+export function handleSkipLinkActivation(
+  event: Pick<ReactMouseEvent<HTMLAnchorElement>, "preventDefault" | "currentTarget">,
+): void {
+  event.preventDefault();
+  event.currentTarget.ownerDocument.getElementById("main-content")?.focus();
+}
 
 export const AppShell: FC = () => {
   const [themeMode, setThemeMode] = useState<ThemeMode>("auto");
@@ -23,7 +30,7 @@ export const AppShell: FC = () => {
 
   return (
     <div className="workspace-shell">
-      <a className="skip-link" href="#main-content">
+      <a className="skip-link" href="#main-content" onClick={handleSkipLinkActivation}>
         Skip to main content
       </a>
       <header className="workspace-topbar">
@@ -45,7 +52,12 @@ export const AppShell: FC = () => {
         </div>
       </header>
 
-      <main id="main-content" className="workspace-main" aria-labelledby="app-title">
+      <main
+        id="main-content"
+        className="workspace-main"
+        aria-labelledby="app-title"
+        tabIndex={-1}
+      >
         <div className="workspace-intro">
           <div>
             <p className="eyebrow">Workspace</p>
