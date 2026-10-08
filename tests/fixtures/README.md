@@ -8,19 +8,20 @@ node --experimental-strip-types.
 The committed spec.json is the trust anchor. It defines schema 2, generator
 version 2, exact one-second generation parameters, all ten formats and codec
 arguments, and exact FFmpeg/FFprobe version policy (8.1.2 in this repository).
-The generator and tests validate the manifest against this specification; a
-newly reported tool version cannot silently become trusted.
+It also contains immutable SHA-256 identities for supported release assets.
+The current committed asset table supports `darwin-arm64`; other platforms fail
+clearly until their exact release binary digests are committed. A caller may
+select a binary path, but cannot supply or override its expected digest.
 
-Set the binaries and their SHA-256 digests explicitly:
+Set the release-pinned binary paths explicitly:
 
     export LUMAFLOW_FFMPEG_TEST_BIN=/absolute/path/to/ffmpeg
-    export LUMAFLOW_FFMPEG_TEST_SHA256=sha256-of-that-ffmpeg
     export LUMAFLOW_FFPROBE_TEST_BIN=/absolute/path/to/ffprobe
-    export LUMAFLOW_FFPROBE_TEST_SHA256=sha256-of-that-ffprobe
     npm run fixtures
 
 The generator refuses to use a system ffmpeg discovered on PATH. It checks
-that the configured executable and digest match the trusted spec, generates
+that the configured executable's version and digest match the committed trusted
+spec, generates
 MP4, MOV, MKV, WebM, AVI, MP3, M4A, WAV, FLAC, and OGG files, and writes
 manifest.json with the exact tool version, binary digest, byte sizes, and
 SHA-256 checksum for every fixture.
@@ -38,9 +39,13 @@ against every generated media file, exercises the Rust planner's
 remux/transcoding/lossless/unsupported branches, runs the real FFmpeg
 scheduler, verifies the completed output by probing it again, and emits
 serialized queue snapshots/events. The React harness validates that trace at
-runtime before rendering the real AppShell, intake, settings, and queue
-components in jsdom. It uses Testing Library user-event keyboard, focus,
-Enter, Space, click, and DOM interactions. No text placeholders or mocked
+runtime before rendering the real AppShell, settings, and queue components in
+jsdom. The accessibility test consumes the Rust trace's initial snapshot and
+serialized events; it does not inject intake, queue, retry, cancellation, or
+output-folder adapters. It uses Testing Library user-event keyboard, focus,
+Enter, Space, click, and DOM interactions. This is renderer integration
+coverage: it does not exercise the Tauri command bridge or native file picker,
+which remain in the opt-in desktop runner. No text placeholders or mocked
 planner/backend responses are accepted.
 
 This is renderer integration coverage, not a full desktop renderer-to-Tauri

@@ -6,6 +6,7 @@ import {
   loadFixtureSpec,
   parseToolVersion,
   sha256File,
+  trustedBinaryIdentity,
   validateFixtureManifest,
   type FixtureDefinition,
   type FixtureManifest,
@@ -116,9 +117,10 @@ function requirePinnedFfmpeg(spec: FixtureSpec): {
     .find((line) => line.trim().length > 0)
     ?.trim() ?? "";
   const version = parseToolVersion(versionLine, "ffmpeg");
-  if (version !== spec.ffmpeg.version) {
+  const trustedIdentity = trustedBinaryIdentity(spec.ffmpeg, "FFmpeg");
+  if (version !== trustedIdentity.version) {
     throw new Error(
-      "Configured FFmpeg version " + version + " does not match trusted fixture spec version " + spec.ffmpeg.version,
+      "Configured FFmpeg version " + version + " does not match committed trusted version " + trustedIdentity.version,
     );
   }
   const requiredVersion = process.env[versionEnvironmentVariable];
@@ -128,16 +130,9 @@ function requirePinnedFfmpeg(spec: FixtureSpec): {
     );
   }
   const sha256 = sha256File(binary);
-  const expectedSha256 = process.env[spec.ffmpeg.sha256Env];
-  if (!expectedSha256) {
+  if (trustedIdentity.sha256 !== sha256) {
     throw new Error(
-      spec.ffmpeg.sha256Env +
-        " is required and must contain the SHA-256 digest of the configured FFmpeg executable",
-    );
-  }
-  if (expectedSha256 !== sha256) {
-    throw new Error(
-      "Configured FFmpeg SHA-256 " + sha256 + " does not match " + spec.ffmpeg.sha256Env + "=" + expectedSha256,
+      "Configured FFmpeg SHA-256 " + sha256 + " does not match the committed trusted digest " + trustedIdentity.sha256,
     );
   }
   return { binary, version, versionLine, sha256 };

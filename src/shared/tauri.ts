@@ -64,9 +64,13 @@ export function selectFiles(): Promise<string[]> {
 export const AUTHORIZED_FILE_DROP_EVENT = "authorized-file-drop";
 
 export function registerFileDropHandler(handler: (paths: string[]) => void): Promise<UnlistenFn> {
-  return getCurrentWebview().listen<string[]>(AUTHORIZED_FILE_DROP_EVENT, (event) => {
-    handler(event.payload);
-  });
+  try {
+    return getCurrentWebview().listen<string[]>(AUTHORIZED_FILE_DROP_EVENT, (event) => {
+      handler(event.payload);
+    });
+  } catch (error) {
+    return Promise.reject(LumaFlowError.from(error));
+  }
 }
 
 export function selectOutputFolder(): Promise<string | null> {

@@ -11,23 +11,69 @@ use lumaflow_lib::jobs::{FfmpegRunner, JobExecution, Scheduler};
 use lumaflow_lib::media::planner::plan_conversion;
 use lumaflow_lib::media::probe::{CommandOutput, CommandRunner, probe_media};
 use lumaflow_lib::media::MediaError;
-use serde::Serialize;
-
-const FIXTURE_NAMES: [&str; 10] = [
-    "sample.mp4",
-    "sample.mov",
-    "sample.mkv",
-    "sample.webm",
-    "sample.avi",
-    "sample.mp3",
-    "sample.m4a",
-    "sample.wav",
-    "sample.flac",
-    "sample.ogg",
-];
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 struct PinnedFfprobeRunner {
     program: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrustedSpec {
+    schema_version: u32,
+    generator_version: u32,
+    parameters: serde_json::Value,
+    ffmpeg: TrustedBinary,
+    ffprobe: TrustedBinary,
+    generation: TrustedGeneration,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrustedBinary {
+    version_policy: String,
+    version: String,
+    assets: std::collections::HashMap<String, TrustedAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustedAsset {
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustedGeneration {
+    fixtures: Vec<TrustedFixture>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustedFixture {
+    name: String,
+    container: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureManifest {
+    schema_version: u32,
+    generator_version: u32,
+    parameters: serde_json::Value,
+    ffmpeg: FixtureManifestBinary,
+    files: Vec<FixtureManifestFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureManifestBinary {
+    version: String,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureManifestFile {
+    name: String,
+    bytes: u64,
+    sha256: String,
 }
 
 struct TempDirectory {
@@ -107,7 +153,64 @@ fn repository_fixture_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures")
 }
 
-fn required_executable(name: &str) -> PathBuf {
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn trusted_platform_key() -> &'static str { "darwin-arm64" }
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn trusted_platform_key() -> &'static str { "darwin-x64" }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn trusted_platform_key() -> &'static str { "linux-x64" }
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn trusted_platform_key() -> &'static str { "linux-arm64" }
+
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64"),
+)))]
+fn trusted_platform_key() -> &'static str { "unsupported-platform" }
+
+fn load_trusted_spec() -> TrustedSpec {
+    let path = repository_fixture_directory().join("spec.json");
+    let spec: TrustedSpec = serde_json::from_str(
+        &fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("trusted fixture specification is missing at {}: {error}", path.display())
+        }),
+    )
+    .unwrap_or_else(|error| panic!("trusted fixture specification is invalid: {error}"));
+    assert_eq!(spec.schema_version, 2, "trusted fixture spec schema must be 2");
+    assert_eq!(spec.generator_version, 2, "trusted fixture spec generator must be 2");
+    assert_eq!(spec.ffmpeg.version_policy, "exact", "FFmpeg trust policy must be exact");
+    assert_eq!(spec.ffprobe.version_policy, "exact", "FFprobe trust policy must be exact");
+    assert_eq!(spec.generation.fixtures.len(), 10, "trusted fixture spec must list 10 fixtures");
+    spec
+}
+
+fn trusted_binary_identity<'a>(binary: &'a TrustedBinary, label: &str) -> (&'a str, &'a str) {
+    let platform = trusted_platform_key();
+    let asset = binary.assets.get(platform).unwrap_or_else(|| {
+        panic!(
+            "no committed trusted {label} test binary identity exists for platform {platform}; refusing direct integration"
+        )
+    });
+    assert_eq!(asset.sha256.len(), 64, "trusted {label} digest must be SHA-256");
+    assert!(
+        asset.sha256.chars().all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()),
+        "trusted {label} digest must be lowercase hexadecimal"
+    );
+    (&binary.version, &asset.sha256)
+}
+
+fn sha256_file(path: &Path) -> String {
+    let bytes = fs::read(path).unwrap_or_else(|error| panic!("could not read {} for SHA-256: {error}", path.display()));
+    let digest = Sha256::digest(bytes);
+    format!("{digest:x}")
+}
+
+fn required_executable(name: &str, binary: &TrustedBinary, label: &str) -> PathBuf {
     let raw = env::var(name).unwrap_or_else(|_| {
         panic!(
             "{name} is required; set it to the release-pinned executable before running real media integration tests"
@@ -124,10 +227,24 @@ fn required_executable(name: &str) -> PathBuf {
         "{name} must point to an executable file: {}",
         path.display()
     );
+    let (trusted_version, trusted_sha256) = trusted_binary_identity(binary, label);
+    let version_output = Command::new(&path)
+        .arg("-version")
+        .output()
+        .unwrap_or_else(|error| panic!("{name} could not execute -version: {error}"));
+    assert!(version_output.status.success(), "{name} -version failed");
+    let version_text = String::from_utf8_lossy(&version_output.stdout);
+    let first_line = version_text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let reported_version = first_line.split_whitespace().nth(2).unwrap_or("");
+    assert_eq!(reported_version, trusted_version, "{name} version is not the committed trusted version");
+    assert_eq!(sha256_file(&path), trusted_sha256, "{name} does not match the committed trusted digest");
     path
 }
 
-fn require_generated_fixtures() -> Vec<PathBuf> {
+fn require_generated_fixtures(spec: &TrustedSpec, trusted_ffmpeg: &TrustedBinary) -> Vec<PathBuf> {
     let directory = repository_fixture_directory();
     let manifest_path = directory.join("manifest.json");
     assert!(
@@ -135,28 +252,30 @@ fn require_generated_fixtures() -> Vec<PathBuf> {
         "fixture manifest is missing at {}; run npm run fixtures with the pinned FFmpeg asset",
         manifest_path.display()
     );
-    let manifest: serde_json::Value = serde_json::from_str(
+    let manifest: FixtureManifest = serde_json::from_str(
         &fs::read_to_string(&manifest_path).expect("fixture manifest should be readable"),
     )
     .expect("fixture manifest should be valid JSON");
-    let manifest_names = manifest["files"]
-        .as_array()
-        .expect("fixture manifest should contain files")
-        .iter()
-        .map(|file| file["name"].as_str().expect("fixture name should be a string"))
-        .collect::<Vec<_>>();
-    assert_eq!(manifest_names, FIXTURE_NAMES);
+    assert_eq!(manifest.schema_version, spec.schema_version);
+    assert_eq!(manifest.generator_version, spec.generator_version);
+    assert_eq!(manifest.parameters, spec.parameters, "fixture manifest parameters must match the trusted spec");
+    let (trusted_version, trusted_sha256) = trusted_binary_identity(trusted_ffmpeg, "FFmpeg");
+    assert_eq!(manifest.ffmpeg.version, trusted_version);
+    assert_eq!(manifest.ffmpeg.sha256, trusted_sha256);
+    assert_eq!(manifest.files.len(), spec.generation.fixtures.len());
+    manifest.files.iter().zip(&spec.generation.fixtures).for_each(|(file, expected)| {
+        assert_eq!(file.name, expected.name);
+        assert!(file.bytes > 0, "fixture must be non-empty: {}", file.name);
+        let path = directory.join(&file.name);
+        assert!(path.is_file(), "generated fixture is missing: {}", path.display());
+        assert_eq!(fs::metadata(&path).expect("fixture metadata should exist").len(), file.bytes);
+        assert_eq!(sha256_file(&path), file.sha256, "fixture checksum mismatch: {}", path.display());
+    });
 
-    FIXTURE_NAMES
+    spec.generation.fixtures
         .iter()
         .map(|name| {
-            let path = directory.join(name);
-            assert!(path.is_file(), "generated fixture is missing: {}", path.display());
-            assert!(
-                fs::metadata(&path).expect("fixture metadata should exist").len() > 0,
-                "generated fixture is empty: {}",
-                path.display()
-            );
+            let path = directory.join(&name.name);
             path
         })
         .collect()
@@ -219,9 +338,10 @@ fn queue_job(id: &str, media: &MediaInfo, settings: OutputSettings) -> QueueJob 
 
 #[test]
 fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
-    let ffmpeg = required_executable("LUMAFLOW_FFMPEG_TEST_BIN");
-    let ffprobe = required_executable("LUMAFLOW_FFPROBE_TEST_BIN");
-    let fixture_paths = require_generated_fixtures();
+    let spec = load_trusted_spec();
+    let ffmpeg = required_executable("LUMAFLOW_FFMPEG_TEST_BIN", &spec.ffmpeg, "FFmpeg");
+    let ffprobe = required_executable("LUMAFLOW_FFPROBE_TEST_BIN", &spec.ffprobe, "FFprobe");
+    let fixture_paths = require_generated_fixtures(&spec, &spec.ffmpeg);
     let fixture_directory = repository_fixture_directory();
     let probe_runner = PinnedFfprobeRunner { program: ffprobe };
     let output_root = TempDirectory::new("lumaflow-real-media");
@@ -233,9 +353,8 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
         });
         probed.push(media);
     }
-    let expected_containers = ["mp4", "mov", "matroska", "webm", "avi", "mp3", "m4a", "wav", "flac", "ogg"];
-    for (media, expected_container) in probed.iter().zip(expected_containers) {
-        assert_eq!(media.container, expected_container, "unexpected container for {}", media.file_name);
+    for (media, expected_fixture) in probed.iter().zip(&spec.generation.fixtures) {
+        assert_eq!(media.container, expected_fixture.container, "unexpected container for {}", media.file_name);
         assert!(media.duration_seconds > 0.0);
         assert!(!media.audio_streams.is_empty() || !media.video_streams.is_empty());
     }

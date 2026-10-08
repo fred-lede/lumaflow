@@ -14,7 +14,7 @@ export type FixtureParameters = {
 export type FixtureBinaryPolicy = {
   versionPolicy: "exact";
   version: string;
-  sha256Env: string;
+  assets: Record<string, { sha256: string }>;
 };
 
 export type FixtureDefinition = {
@@ -102,8 +102,26 @@ function binaryPolicy(value: unknown, label: string): FixtureBinaryPolicy {
   return {
     versionPolicy: "exact",
     version: string(input.version, label + ".version"),
-    sha256Env: string(input.sha256Env, label + ".sha256Env"),
+    assets: binaryAssets(input.assets, label + ".assets"),
   };
+}
+
+function binaryAssets(value: unknown, label: string): Record<string, { sha256: string }> {
+  const input = record(value, label);
+  const entries = Object.entries(input);
+  if (entries.length === 0) {
+    throw new Error("Fixture " + label + " must define at least one approved platform asset");
+  }
+  return Object.fromEntries(
+    entries.map(([platform, value]) => {
+      const asset = record(value, label + "." + platform);
+      const sha256 = string(asset.sha256, label + "." + platform + ".sha256");
+      if (!/^[a-f0-9]{64}$/u.test(sha256)) {
+        throw new Error("Fixture " + label + "." + platform + ".sha256 must be a lowercase SHA-256 digest");
+      }
+      return [platform, { sha256 }];
+    }),
+  );
 }
 
 function fixtureDefinition(value: unknown, index: number): FixtureDefinition {
@@ -172,6 +190,24 @@ export function loadFixtureSpec(path = resolve(import.meta.dirname, "spec.json")
   }
 }
 
+export function currentPlatformKey(): string {
+  return process.platform + "-" + process.arch;
+}
+
+export function trustedBinaryIdentity(
+  policy: FixtureBinaryPolicy,
+  tool: "FFmpeg" | "FFprobe",
+): { version: string; sha256: string } {
+  const platform = currentPlatformKey();
+  const asset = policy.assets[platform];
+  if (!asset) {
+    throw new Error(
+      "No trusted " + tool + " test binary identity is committed for platform " + platform,
+    );
+  }
+  return { version: policy.version, sha256: asset.sha256 };
+}
+
 export function parseToolVersion(output: string, tool: "ffmpeg" | "ffprobe"): string {
   const line = output.split(/\r?\n/u).find((candidate) => candidate.trim().length > 0)?.trim() ?? "";
   const match = line.match(new RegExp("^" + tool + " version ([^\\s]+)"));
@@ -214,6 +250,12 @@ export function validateFixtureManifest(value: unknown, spec: FixtureSpec): Fixt
   const digest = string(ffmpeg.sha256, "manifest.ffmpeg.sha256");
   if (!/^[a-f0-9]{64}$/u.test(digest)) {
     throw new Error("Fixture manifest FFmpeg sha256 must be a lowercase SHA-256 digest");
+  }
+  const trustedDigests = Object.values(spec.ffmpeg.assets).map((asset) => asset.sha256);
+  if (!trustedDigests.includes(digest)) {
+    throw new Error(
+      "Fixture manifest FFmpeg sha256 is not one of the committed trusted digests",
+    );
   }
   const filesValue = input.files;
   if (!Array.isArray(filesValue) || filesValue.length !== spec.generation.fixtures.length) {

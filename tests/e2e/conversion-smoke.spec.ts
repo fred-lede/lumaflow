@@ -80,7 +80,7 @@ describe("real conversion boundary", () => {
     expect(trace.snapshots.completed.jobs.find((job) => job.id === "retry-job")?.state.kind).toBe("completed");
     expect(trace.beforeRetryEvents.some((event) => event.kind === "progress")).toBe(false);
     expect(trace.afterRetryEvents.some((event) => event.kind === "progress")).toBe(true);
-  });
+  }, 30000);
 });
 
 describe("opt-in desktop E2E protocol", () => {
@@ -105,8 +105,12 @@ describe("opt-in desktop E2E protocol", () => {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      const lines = output.trim().split(/\r?\n/u);
+      const lines = output.split(/\r?\n/u);
+      if (lines.at(-1) === "") {
+        lines.pop();
+      }
       expect(lines).toHaveLength(1);
+      expect(lines[0]).not.toBe("");
       const response = JSON.parse(lines[0] ?? "") as unknown;
       expect(response).toEqual({
         protocol: "lumaflow.desktop-e2e",

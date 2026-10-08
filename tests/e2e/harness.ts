@@ -17,6 +17,7 @@ import {
   loadFixtureSpec,
   parseToolVersion,
   sha256File,
+  trustedBinaryIdentity,
   validateFixtureManifest,
   type FixtureBinaryPolicy,
 } from "../fixtures/contract";
@@ -278,17 +279,14 @@ function requiredExecutable(name: string, policy: FixtureBinaryPolicy, tool: "ff
     throw new Error(name + " could not execute -version: " + String(error));
   }
   const version = parseToolVersion(versionOutput, tool);
-  if (version !== policy.version) {
-    throw new Error(name + " reports version " + version + "; trusted fixture spec requires " + policy.version);
-  }
-  const expectedDigest = process.env[policy.sha256Env];
-  if (!expectedDigest) {
-    throw new Error(policy.sha256Env + " is required for " + name + " and must contain its SHA-256 digest");
+  const trustedIdentity = trustedBinaryIdentity(policy, tool === "ffmpeg" ? "FFmpeg" : "FFprobe");
+  if (version !== trustedIdentity.version) {
+    throw new Error(name + " reports version " + version + "; committed trusted identity requires " + trustedIdentity.version);
   }
   const actualDigest = sha256File(value);
-  if (actualDigest !== expectedDigest) {
+  if (actualDigest !== trustedIdentity.sha256) {
     throw new Error(
-      name + " SHA-256 " + actualDigest + " does not match " + policy.sha256Env + "=" + expectedDigest,
+      name + " SHA-256 " + actualDigest + " does not match the committed trusted digest " + trustedIdentity.sha256,
     );
   }
   return value;

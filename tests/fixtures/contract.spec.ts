@@ -15,12 +15,20 @@ describe("trusted fixture contract", () => {
     expect(spec.ffmpeg).toMatchObject({
       versionPolicy: "exact",
       version: "8.1.2",
-      sha256Env: "LUMAFLOW_FFMPEG_TEST_SHA256",
+      assets: {
+        "darwin-arm64": {
+          sha256: "1332dc2de372bade9a8a63da0d6cdfab9de97fcefbae707bcc0b0506e1203327",
+        },
+      },
     });
     expect(spec.ffprobe).toMatchObject({
       versionPolicy: "exact",
       version: "8.1.2",
-      sha256Env: "LUMAFLOW_FFPROBE_TEST_SHA256",
+      assets: {
+        "darwin-arm64": {
+          sha256: "4322275c1c2ac6ba15c695b288788bc1204e75211b3d5c030e5812c82a6dff73",
+        },
+      },
     });
     expect(spec.generation.fixtures.map((fixture) => fixture.name)).toEqual([
       "sample.mp4",
