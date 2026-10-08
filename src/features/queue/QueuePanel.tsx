@@ -31,6 +31,19 @@ function queuedNeighborIndex(
   return -1;
 }
 
+export function queueTransitionAnnouncement(job: QueueJob, previousState?: string): string | null {
+  if (!previousState || previousState === job.state.kind) {
+    return null;
+  }
+  if (job.state.kind === "completed") {
+    return `${jobName(job)} completed.${job.state.warning ? ` Warning: ${job.state.warning.message}` : ""}`;
+  }
+  if (job.state.kind === "failed") {
+    return `${jobName(job)} failed. ${job.state.error.message}`;
+  }
+  return null;
+}
+
 export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController }) => {
   const { controller, state } = useQueueEvents({ controller: providedController });
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -47,12 +60,9 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     const messages: string[] = [];
     for (const job of jobs) {
       const previousState = previousStates.current.get(job.id);
-      if (previousState && previousState !== job.state.kind) {
-        if (job.state.kind === "completed") {
-          messages.push(`${jobName(job)} completed.`);
-        } else if (job.state.kind === "failed") {
-          messages.push(`${jobName(job)} failed. ${job.state.error.message}`);
-        }
+      const message = queueTransitionAnnouncement(job, previousState);
+      if (message) {
+        messages.push(message);
       }
       previousStates.current.set(job.id, job.state.kind);
     }
@@ -79,7 +89,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     }
   }, []);
 
-  const isBusy = busyAction !== null || state.pendingGlobalAction !== null;
+  const isBusy = busyAction !== null || state.pendingMutation !== null;
   const handleCancel = useCallback(
     (jobId: string) => void runAction(`cancel-${jobId}`, () => controller.cancelJob(jobId)),
     [controller, runAction],
@@ -105,9 +115,10 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
           <p className="eyebrow">Processing workspace</p>
           <h2 id="queue-title">Batch queue</h2>
         </div>
-        <span className="card-step" aria-label={`${jobs.length} queue items`}>
-          {jobs.length.toString().padStart(2, "0")}
-        </span>
+        <dl className="queue-count">
+          <dt className="sr-only">Queue items</dt>
+          <dd className="card-step">{jobs.length.toString().padStart(2, "0")}</dd>
+        </dl>
       </div>
       <p className="supporting-text queue-panel__intro">
         Monitor local conversions, recover failures, and adjust the display order with the keyboard.
@@ -180,6 +191,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
               key={job.id}
               job={job}
               pendingAction={state.pendingActions[job.id]}
+              mutationPending={state.pendingMutation !== null}
               isFirst={index === 0}
               isLast={index === jobs.length - 1}
               canMoveUp={canReorderJob(job.state.kind) && queuedNeighborIndex(jobs, index, "up") >= 0}

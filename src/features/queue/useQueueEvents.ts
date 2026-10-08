@@ -32,6 +32,7 @@ export type QueueClientState = {
   paused: boolean;
   pendingActions: Record<string, QueueJobAction>;
   pendingGlobalAction: string | null;
+  pendingMutation: string | null;
   revision: number;
 };
 
@@ -92,6 +93,7 @@ function emptyState(): QueueClientState {
     paused: false,
     pendingActions: {},
     pendingGlobalAction: null,
+    pendingMutation: null,
     revision: 0,
   };
 }
@@ -234,6 +236,11 @@ export function createQueueStore(initialSnapshot?: QueueSnapshot) {
     emit();
   };
 
+  const setPendingMutation = (mutation: string | null): void => {
+    state = { ...state, pendingMutation: mutation };
+    emit();
+  };
+
   const setEventError = (error: unknown): void => {
     state = { ...state, eventError: toQueueError(error) };
     emit();
@@ -246,6 +253,7 @@ export function createQueueStore(initialSnapshot?: QueueSnapshot) {
     setEventError,
     setPendingAction,
     setPendingGlobalAction,
+    setPendingMutation,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -280,63 +288,98 @@ export function createQueueController(options: {
   const store = createQueueStore(options.initialSnapshot);
   const commands = { ...defaultCommandAdapter, ...options.commands };
   let nextOperationId = 0;
-  let latestGlobalOperation = 0;
-  const latestJobOperations = new Map<string, number>();
+  let activeMutationId: number | null = null;
+  let queuedMutationCount = 0;
+  let mutationTail: Promise<void> = Promise.resolve();
 
-  const beginJobOperation = (jobIds: string[], action: QueueJobAction): number => {
-    const operationId = ++nextOperationId;
-    for (const jobId of jobIds) {
-      latestJobOperations.set(jobId, operationId);
-    }
-    store.setPendingAction(jobIds, action);
-    return operationId;
+  type MutationOptions<T> = {
+    label: string;
+    jobIds?: string[];
+    jobAction?: QueueJobAction;
+    globalAction?: string;
+    execute: () => Promise<T>;
+    apply?: (result: T, operationId: number) => void;
   };
 
-  const isCurrentJobOperation = (jobIds: string[], operationId: number): boolean =>
-    jobIds.every((jobId) => latestJobOperations.get(jobId) === operationId);
+  const markMutation = <T>(mutation: MutationOptions<T>, operationId: number): void => {
+    activeMutationId = operationId;
+    store.setPendingMutation(mutation.label);
+    if (mutation.jobIds && mutation.jobAction) {
+      store.setPendingAction(mutation.jobIds, mutation.jobAction);
+    }
+    if (mutation.globalAction) {
+      store.setPendingGlobalAction(mutation.globalAction);
+    }
+  };
 
-  const finishJobOperation = (jobIds: string[], operationId: number): void => {
-    if (!isCurrentJobOperation(jobIds, operationId)) {
+  const clearMutation = <T>(mutation: MutationOptions<T>, operationId: number): void => {
+    if (activeMutationId !== operationId) {
       return;
     }
-    for (const jobId of jobIds) {
-      latestJobOperations.delete(jobId);
+    activeMutationId = null;
+    if (mutation.jobIds && mutation.jobAction) {
+      store.setPendingAction(mutation.jobIds, undefined);
     }
-    store.setPendingAction(jobIds, undefined);
+    if (mutation.globalAction) {
+      store.setPendingGlobalAction(null);
+    }
+    if (queuedMutationCount === 0) {
+      store.setPendingMutation(null);
+    }
   };
 
-  const runJobSnapshotCommand = (
-    jobIds: string[],
-    action: QueueJobAction,
-    command: () => Promise<QueueSnapshot>,
-  ): Promise<QueueSnapshot> => {
-    const operationId = beginJobOperation(jobIds, action);
-    return command().then((snapshot) => {
-      if (isCurrentJobOperation(jobIds, operationId)) {
-        store.applySnapshot(snapshot);
-      }
-      return snapshot;
-    }).finally(() => finishJobOperation(jobIds, operationId));
-  };
-
-  const runGlobalSnapshotCommand = (
-    action: string,
-    command: () => Promise<QueueSnapshot>,
-  ): Promise<QueueSnapshot> => {
+  const enqueueMutation = <T>(mutation: MutationOptions<T>): Promise<T> => {
     const operationId = ++nextOperationId;
-    latestGlobalOperation = operationId;
-    store.setPendingGlobalAction(action);
-    return command().then((snapshot) => {
-      if (latestGlobalOperation === operationId) {
-        store.applySnapshot(snapshot);
+    queuedMutationCount += 1;
+    if (queuedMutationCount === 1) {
+      markMutation(mutation, operationId);
+    }
+
+    const run = async (): Promise<T> => {
+      if (activeMutationId !== operationId) {
+        markMutation(mutation, operationId);
       }
-      return snapshot;
-    }).finally(() => {
-      if (latestGlobalOperation === operationId) {
-        store.setPendingGlobalAction(null);
+      try {
+        const result = await mutation.execute();
+        if (mutation.apply && activeMutationId === operationId) {
+          mutation.apply(result, operationId);
+        }
+        return result;
+      } finally {
+        queuedMutationCount -= 1;
+        clearMutation(mutation, operationId);
       }
-    });
+    };
+
+    const result = mutationTail.then(run, run);
+    mutationTail = result.then(() => undefined, () => undefined);
+    return result;
   };
+
+  const runSnapshotMutation = (
+    label: string,
+    jobIds: string[],
+    jobAction: QueueJobAction,
+    command: () => Promise<QueueSnapshot>,
+    globalAction?: string,
+  ): Promise<QueueSnapshot> => enqueueMutation({
+    label,
+    jobIds,
+    jobAction,
+    globalAction,
+    execute: command,
+    apply: (snapshot) => store.applySnapshot(snapshot),
+  });
+
+  const runGlobalSnapshotMutation = (
+    label: string,
+    command: () => Promise<QueueSnapshot>,
+  ): Promise<QueueSnapshot> => enqueueMutation({
+    label,
+    globalAction: label,
+    execute: command,
+    apply: (snapshot) => store.applySnapshot(snapshot),
+  });
 
   const moveJob = (jobId: string, direction: "up" | "down"): Promise<QueueSnapshot> => {
     const current = store.getState();
@@ -367,24 +410,28 @@ export function createQueueController(options: {
     }
     const nextOrder = [...current.order];
     [nextOrder[index], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[index]];
-    return runJobSnapshotCommand([jobId, targetJobId], "reorder", () => commands.reorderJobs(nextOrder));
+    return runSnapshotMutation("reorder", [jobId, targetJobId], "reorder", () => commands.reorderJobs(nextOrder));
   };
 
   return {
     applySnapshot: store.applySnapshot,
-    cancelJob: (jobId) => runJobSnapshotCommand([jobId], "cancel", () => commands.cancelJob(jobId)),
-    clearCompleted: () => runGlobalSnapshotCommand("clear", () => commands.clearCompleted()),
+    cancelJob: (jobId) => runSnapshotMutation("cancel", [jobId], "cancel", () => commands.cancelJob(jobId)),
+    clearCompleted: () => runGlobalSnapshotMutation("clear", () => commands.clearCompleted()),
     getState: store.getState,
     handleEvent: store.handleEvent,
     moveJob,
     openOutputFolder: (jobId, path) => {
-      const operationId = beginJobOperation([jobId], "openOutputFolder");
-      return commands.openOutputFolder(path).finally(() => finishJobOperation([jobId], operationId));
+      return enqueueMutation({
+        label: "openOutputFolder",
+        jobIds: [jobId],
+        jobAction: "openOutputFolder",
+        execute: () => commands.openOutputFolder(path),
+      });
     },
-    pauseAll: () => runGlobalSnapshotCommand("pause", () => commands.pauseAll()),
+    pauseAll: () => runGlobalSnapshotMutation("pause", () => commands.pauseAll()),
     reportEventError: store.setEventError,
-    resumeAll: () => runGlobalSnapshotCommand("resume", () => commands.resumeAll()),
-    retryJob: (jobId) => runJobSnapshotCommand([jobId], "retry", () => commands.retryJob(jobId)),
+    resumeAll: () => runGlobalSnapshotMutation("resume", () => commands.resumeAll()),
+    retryJob: (jobId) => runSnapshotMutation("retry", [jobId], "retry", () => commands.retryJob(jobId)),
     subscribe: store.subscribe,
   };
 }

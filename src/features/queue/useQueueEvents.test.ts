@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { JobEvent, QueueJob, QueueSnapshot } from "../../domain/job";
 import { QueueRow } from "./QueueRow";
-import { QueuePanel } from "./QueuePanel";
+import { QueuePanel, queueTransitionAnnouncement } from "./QueuePanel";
 import {
   createQueueController,
   createQueueStore,
@@ -159,30 +159,136 @@ describe("queue actions and accessible rendering", () => {
     expect(commands.clearCompleted).toHaveBeenCalledOnce();
   });
 
-  it("locks overlapping job actions and ignores the stale command response", async () => {
-    const deferred: Array<{ resolve: (value: QueueSnapshot) => void }> = [];
+  it("serializes cross-job mutations behind one global lock", async () => {
+    let resolveCancel: ((value: QueueSnapshot) => void) | undefined;
+    let resolveRetry: ((value: QueueSnapshot) => void) | undefined;
     const commands: QueueCommandAdapter = {
       pauseAll: vi.fn(async () => snapshot([])),
       resumeAll: vi.fn(async () => snapshot([])),
-      cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => deferred.push({ resolve }))),
+      cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
+      retryJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveRetry = resolve; })),
+      clearCompleted: vi.fn(async () => snapshot([])),
+      openOutputFolder: vi.fn(async () => undefined),
+      reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
+    };
+    const controller = createQueueController({
+      initialSnapshot: snapshot([job("one"), job("two", {
+        kind: "failed",
+        label: "Failed",
+        error: { code: "failed", message: "failed" },
+      })], 1),
+      commands,
+    });
+
+    const first = controller.cancelJob("one");
+    const second = controller.retryJob("two");
+    expect(controller.getState().pendingActions.one).toBe("cancel");
+    expect(controller.getState().pendingMutation).toBe("cancel");
+    expect(commands.retryJob).not.toHaveBeenCalled();
+    await Promise.resolve();
+
+    resolveCancel?.(snapshot([job("one", { kind: "cancelled", label: "Cancelled" }), job("two")], 2));
+    await first;
+    await Promise.resolve();
+    expect(commands.retryJob).toHaveBeenCalledWith("two");
+    expect(controller.getState().pendingMutation).toBe("retry");
+
+    resolveRetry?.(snapshot([job("one", { kind: "cancelled", label: "Cancelled" }), job("two")], 3));
+    await Promise.all([first, second]);
+
+    expect(controller.getState().jobsById.one.state.kind).toBe("cancelled");
+    expect(controller.getState().revision).toBe(3);
+    expect(controller.getState().pendingActions).toEqual({});
+    expect(controller.getState().pendingMutation).toBeNull();
+  });
+
+  it("serializes global and row mutations without overlap", async () => {
+    let resolvePause: ((value: QueueSnapshot) => void) | undefined;
+    const commands: QueueCommandAdapter = {
+      pauseAll: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolvePause = resolve; })),
+      resumeAll: vi.fn(async () => snapshot([])),
+      cancelJob: vi.fn(async () => snapshot([])),
       retryJob: vi.fn(async () => snapshot([])),
       clearCompleted: vi.fn(async () => snapshot([])),
       openOutputFolder: vi.fn(async () => undefined),
       reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
     };
-    const controller = createQueueController({ initialSnapshot: snapshot([job("one")], 1), commands });
+    const controller = createQueueController({ initialSnapshot: snapshot([job("one")]), commands });
 
-    const first = controller.cancelJob("one");
-    const second = controller.cancelJob("one");
-    expect(controller.getState().pendingActions.one).toBe("cancel");
+    const pause = controller.pauseAll();
+    const cancel = controller.cancelJob("one");
+    expect(commands.cancelJob).not.toHaveBeenCalled();
+    expect(controller.getState().pendingGlobalAction).toBe("pause");
+    expect(controller.getState().pendingMutation).toBe("pause");
+    await Promise.resolve();
 
-    deferred[1].resolve(snapshot([job("one", { kind: "cancelled", label: "Cancelled" })], 3));
-    deferred[0].resolve(snapshot([job("one")], 2));
-    await Promise.all([first, second]);
+    resolvePause?.(snapshot([job("one")], 2, true));
+    await pause;
+    await cancel;
 
-    expect(controller.getState().jobsById.one.state.kind).toBe("cancelled");
-    expect(controller.getState().revision).toBe(3);
-    expect(controller.getState().pendingActions.one).toBeUndefined();
+    expect(commands.cancelJob).toHaveBeenCalledWith("one");
+    expect(controller.getState().pendingMutation).toBeNull();
+  });
+
+  it("serializes reorder behind an action on either reordered job and cleans both locks", async () => {
+    let resolveReorder: ((value: QueueSnapshot) => void) | undefined;
+    let resolveCancel: ((value: QueueSnapshot) => void) | undefined;
+    const commands: QueueCommandAdapter = {
+      pauseAll: vi.fn(async () => snapshot([])),
+      resumeAll: vi.fn(async () => snapshot([])),
+      cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
+      retryJob: vi.fn(async () => snapshot([])),
+      clearCompleted: vi.fn(async () => snapshot([])),
+      openOutputFolder: vi.fn(async () => undefined),
+      reorderJobs: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveReorder = resolve; })),
+    };
+    const controller = createQueueController({ initialSnapshot: snapshot([job("one"), job("two")]), commands });
+
+    const reorder = controller.moveJob("two", "up");
+    const cancel = controller.cancelJob("two");
+    expect(commands.cancelJob).not.toHaveBeenCalled();
+    expect(controller.getState().pendingActions).toEqual({ one: "reorder", two: "reorder" });
+    await Promise.resolve();
+
+    resolveReorder?.(snapshot([job("two"), job("one")], 2));
+    await reorder;
+    await Promise.resolve();
+    expect(commands.cancelJob).toHaveBeenCalledWith("two");
+    expect(controller.getState().pendingActions).toEqual({ two: "cancel" });
+
+    resolveCancel?.(snapshot([job("two", { kind: "cancelled", label: "Cancelled" }), job("one")], 3));
+    await cancel;
+    expect(controller.getState().pendingActions).toEqual({});
+    expect(controller.getState().pendingMutation).toBeNull();
+  });
+
+  it("releases both reorder locks after failure before the queued action starts", async () => {
+    let rejectReorder: ((reason?: unknown) => void) | undefined;
+    let resolveCancel: ((value: QueueSnapshot) => void) | undefined;
+    const commands: QueueCommandAdapter = {
+      pauseAll: vi.fn(async () => snapshot([])),
+      resumeAll: vi.fn(async () => snapshot([])),
+      cancelJob: vi.fn(() => new Promise<QueueSnapshot>((resolve) => { resolveCancel = resolve; })),
+      retryJob: vi.fn(async () => snapshot([])),
+      clearCompleted: vi.fn(async () => snapshot([])),
+      openOutputFolder: vi.fn(async () => undefined),
+      reorderJobs: vi.fn(() => new Promise<QueueSnapshot>((_, reject) => { rejectReorder = reject; })),
+    };
+    const controller = createQueueController({ initialSnapshot: snapshot([job("one"), job("two")]), commands });
+
+    const reorder = controller.moveJob("two", "up");
+    const cancel = controller.cancelJob("two");
+    await Promise.resolve();
+    rejectReorder?.({ code: "invalid_order", message: "Invalid order" });
+
+    await expect(reorder).rejects.toMatchObject({ code: "invalid_order" });
+    expect(controller.getState().pendingActions).toEqual({ two: "cancel" });
+    expect(commands.cancelJob).toHaveBeenCalledWith("two");
+
+    resolveCancel?.(snapshot([job("two", { kind: "cancelled", label: "Cancelled" }), job("one")], 2));
+    await cancel;
+    expect(controller.getState().pendingMutation).toBeNull();
+    expect(controller.getState().pendingActions).toEqual({});
   });
 
   it("clears an action lock after an actual command failure and preserves its error", async () => {
@@ -201,6 +307,29 @@ describe("queue actions and accessible rendering", () => {
 
     await expect(controller.openOutputFolder("one", "/output")).rejects.toMatchObject({ code: "open_denied" });
     expect(controller.getState().pendingActions.one).toBeUndefined();
+    expect(controller.getState().pendingMutation).toBeNull();
+
+    await controller.cancelJob("one");
+    expect(commands.cancelJob).toHaveBeenCalledWith("one");
+  });
+
+  it("releases the global lock when a command returns a stale snapshot", async () => {
+    const commands: QueueCommandAdapter = {
+      pauseAll: vi.fn(async () => snapshot([])),
+      resumeAll: vi.fn(async () => snapshot([])),
+      cancelJob: vi.fn(async () => snapshot([job("one")], 1)),
+      retryJob: vi.fn(async () => snapshot([])),
+      clearCompleted: vi.fn(async () => snapshot([])),
+      openOutputFolder: vi.fn(async () => undefined),
+      reorderJobs: vi.fn(async (jobIds: string[]) => snapshot(jobIds.map((id) => job(id)), 2)),
+    };
+    const controller = createQueueController({ initialSnapshot: snapshot([job("one")], 5), commands });
+
+    await controller.cancelJob("one");
+
+    expect(controller.getState().jobsById.one.state.kind).toBe("queued");
+    expect(controller.getState().pendingMutation).toBeNull();
+    expect(controller.getState().pendingActions).toEqual({});
   });
 
   it("locks open-output actions until the typed command settles", async () => {
@@ -223,6 +352,7 @@ describe("queue actions and accessible rendering", () => {
 
     const pending = controller.openOutputFolder("one", "/output");
     expect(controller.getState().pendingActions.one).toBe("openOutputFolder");
+    await Promise.resolve();
     resolveOpen?.();
     await pending;
     expect(controller.getState().pendingActions.one).toBeUndefined();
@@ -322,6 +452,7 @@ describe("queue actions and accessible rendering", () => {
     const markup = renderToStaticMarkup(createElement(QueueRow, {
       job: job("pending", { kind: "completed", label: "Completed", outputPath: "/output/pending.mp4" }),
       pendingAction: "openOutputFolder",
+      mutationPending: true,
       isFirst: true,
       isLast: true,
       onCancel: () => undefined,
@@ -333,6 +464,17 @@ describe("queue actions and accessible rendering", () => {
     expect(markup.match(/disabled=""/g)).toHaveLength(5);
   });
 
+  it("announces completion warnings in the live region message", () => {
+    const completed = job("warning", {
+      kind: "completed",
+      label: "Completed",
+      outputPath: "/output/warning.mp4",
+      warning: { code: "cleanup_warning", message: "Cleanup warning" },
+    });
+
+    expect(queueTransitionAnnouncement(completed, "transcoding")).toContain("Cleanup warning");
+  });
+
   it("renders global pause, resume, and clear-completed controls with live announcements", () => {
     const controller = createQueueController({ initialSnapshot: snapshot([]) });
     const markup = renderToStaticMarkup(createElement(QueuePanel, { controller }));
@@ -341,6 +483,8 @@ describe("queue actions and accessible rendering", () => {
     expect(markup).toContain("Pause all");
     expect(markup).toContain("Clear completed");
     expect(markup).toContain("Cancel active");
+    expect(markup).toContain("Queue items");
+    expect(markup).not.toContain('aria-label="0 queue items"');
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain("No conversions in the queue yet.");
   });

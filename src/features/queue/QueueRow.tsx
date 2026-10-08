@@ -19,6 +19,7 @@ export type QueueRowProps = {
   canMoveDown?: boolean;
   canMoveUp?: boolean;
   job: QueueJob;
+  mutationPending?: boolean;
   pendingAction?: QueueJobAction;
   onCancel: (jobId: string) => void;
   onMove: (jobId: string, direction: "up" | "down") => void;
@@ -44,6 +45,7 @@ export const QueueRow: FC<QueueRowProps> = memo(({
   canMoveDown = !isLast,
   canMoveUp = !isFirst,
   job,
+  mutationPending = false,
   pendingAction,
   onCancel,
   onMove,
@@ -53,7 +55,7 @@ export const QueueRow: FC<QueueRowProps> = memo(({
   const status = queueStatusFor(job.state);
   const percentage = progressPercent(job);
   const canOpen = canOpenOutput(job.state.kind) && job.outputPath !== null;
-  const actionLocked = pendingAction !== undefined;
+  const actionLocked = mutationPending || pendingAction !== undefined;
   const canMoveUpForJob = canReorderJob(job.state.kind) && canMoveUp;
   const canMoveDownForJob = canReorderJob(job.state.kind) && canMoveDown;
 

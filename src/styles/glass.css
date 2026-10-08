@@ -496,6 +496,14 @@ input::placeholder {
   margin-top: var(--space-4);
 }
 
+.queue-count {
+  margin: 0;
+}
+
+.queue-count dd {
+  margin: 0;
+}
+
 .queue-toolbar {
   display: flex;
   flex-wrap: wrap;
