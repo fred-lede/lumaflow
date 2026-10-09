@@ -118,6 +118,18 @@ describe("useAudioPreview", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("ignores the delayed media error caused by stopping preview", async () => {
+    const { result, audio } = renderPreview();
+
+    await act(async () => {
+      await result.current.play("/output/clip.mp3");
+    });
+    act(() => result.current.stop());
+    act(() => result.current.handleError());
+
+    expect(result.current.error).toBeNull();
+  });
+
   it("stops the previous preview before switching to another mp4", async () => {
     const { result, audio } = renderPreview();
 

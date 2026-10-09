@@ -176,6 +176,9 @@ export function useAudioPreview(
   }, [resetAudio]);
 
   const handleError = useCallback((): void => {
+    if (!audioRef.current?.src) {
+      return;
+    }
     operationRef.current += 1;
     resetAudio();
     setError(PREVIEW_UNAVAILABLE_ERROR);
