@@ -7,6 +7,7 @@ import GlassPanel from "../../ui/GlassPanel";
 import ErrorDetails, { type TechnicalError } from "../errors/ErrorDetails";
 import { canCancelJob, canReorderJob } from "./queueLabels";
 import QueueRow from "./QueueRow";
+import useAudioPreview from "./useAudioPreview";
 import { useQueueEvents, type QueueController } from "./useQueueEvents";
 
 export type QueuePanelProps = {
@@ -55,8 +56,10 @@ export function nextQueueAnnouncement(current: QueueAnnouncement, text: string):
 
 export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController }) => {
   const { controller, state } = useQueueEvents({ controller: providedController });
+  const preview = useAudioPreview();
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<TechnicalError | null>(null);
+  const [previewErrorPath, setPreviewErrorPath] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState<QueueAnnouncement>({ sequence: 0, text: "" });
   const previousStates = useRef(new Map<string, string>());
   const jobs = state.order
@@ -64,6 +67,13 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     .filter((job): job is NonNullable<typeof job> => job !== undefined);
   const activeJobs = jobs.filter((job) => canCancelJob(job.state.kind));
   const completedJobs = jobs.filter((job) => job.state.kind === "completed");
+
+  useEffect(() => {
+    if (preview.activePath !== null && !jobs.some((job) => job.outputPath === preview.activePath)) {
+      preview.stop();
+      setPreviewErrorPath(null);
+    }
+  }, [jobs, preview.activePath, preview.stop]);
 
   useEffect(() => {
     const messages: string[] = [];
@@ -115,6 +125,13 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     (jobId: string, direction: "up" | "down") =>
       void runAction(`reorder-${jobId}`, () => controller.moveJob(jobId, direction)),
     [controller, runAction],
+  );
+  const handlePreview = useCallback(
+    (path: string) => {
+      setPreviewErrorPath(path);
+      void preview.play(path);
+    },
+    [preview.play],
   );
 
   return (
@@ -208,11 +225,23 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
               onCancel={handleCancel}
               onMove={handleMove}
               onOpenOutputFolder={handleOpenOutputFolder}
+              onPreview={handlePreview}
               onRetry={handleRetry}
+              isPreviewActive={preview.activePath === job.outputPath}
+              previewError={previewErrorPath === job.outputPath ? preview.error : null}
             />
           ))}
         </ol>
       )}
+
+      <audio
+        ref={preview.audioRef}
+        className="audio-preview"
+        aria-hidden="true"
+        preload="metadata"
+        onEnded={preview.handleEnded}
+        onError={preview.handleError}
+      />
 
       <div
         key={announcement.sequence}

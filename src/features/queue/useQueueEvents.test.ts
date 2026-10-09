@@ -3,6 +3,19 @@ import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { JobEvent, QueueJob, QueueSnapshot } from "../../domain/job";
+
+const mockAudioPreview = vi.hoisted(() => ({
+  activePath: null as string | null,
+  audioRef: { current: null as HTMLAudioElement | null },
+  error: null as string | null,
+  handleEnded: vi.fn(),
+  handleError: vi.fn(),
+  play: vi.fn(async () => undefined),
+  stop: vi.fn(),
+}));
+
+vi.mock("./useAudioPreview", () => ({ default: () => mockAudioPreview }));
+
 import { QueueRow } from "./QueueRow";
 import { QueuePanel, nextQueueAnnouncement, queueTransitionAnnouncement } from "./QueuePanel";
 import {
@@ -464,6 +477,7 @@ describe("queue actions and accessible rendering", () => {
         onCancel: () => undefined,
         onMove: () => undefined,
         onOpenOutputFolder: () => undefined,
+        onPreview: () => undefined,
         onRetry: () => undefined,
       }),
     );
@@ -476,6 +490,84 @@ describe("queue actions and accessible rendering", () => {
     expect(markup).toContain("stderr output");
     expect(markup).toContain("Retry");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("renders Play preview only for completed jobs with an output path", () => {
+    const completed = { ...job("completed", { kind: "completed", label: "Completed", outputPath: "/output/completed.mp4" }), outputPath: "/output/completed.mp4" };
+    const completedMarkup = renderToStaticMarkup(createElement(QueueRow, {
+      job: completed,
+      isFirst: true,
+      isLast: true,
+      onCancel: () => undefined,
+      onMove: () => undefined,
+      onOpenOutputFolder: () => undefined,
+      onPreview: () => undefined,
+      onRetry: () => undefined,
+    }));
+    const queuedMarkup = renderToStaticMarkup(createElement(QueueRow, {
+      job: job("queued"),
+      isFirst: true,
+      isLast: true,
+      onCancel: () => undefined,
+      onMove: () => undefined,
+      onOpenOutputFolder: () => undefined,
+      onPreview: () => undefined,
+      onRetry: () => undefined,
+    }));
+    const failedMarkup = renderToStaticMarkup(createElement(QueueRow, {
+      job: job("failed", {
+        kind: "failed",
+        label: "Failed",
+        error: { code: "encode_failed", message: "Stopped" },
+      }),
+      isFirst: true,
+      isLast: true,
+      onCancel: () => undefined,
+      onMove: () => undefined,
+      onOpenOutputFolder: () => undefined,
+      onPreview: () => undefined,
+      onRetry: () => undefined,
+    }));
+
+    expect(completedMarkup).toContain('aria-label="Play preview"');
+    expect(completedMarkup).toContain(">Play preview</button>");
+    expect(queuedMarkup).not.toContain("Play preview");
+    expect(failedMarkup).not.toContain("Play preview");
+  });
+
+  it("renders Stop preview for the active completed row", () => {
+    const completed = { ...job("active", { kind: "completed", label: "Completed", outputPath: "/output/active.mp4" }), outputPath: "/output/active.mp4" };
+    const markup = renderToStaticMarkup(createElement(QueueRow, {
+      job: completed,
+      isFirst: true,
+      isLast: true,
+      isPreviewActive: true,
+      onCancel: () => undefined,
+      onMove: () => undefined,
+      onOpenOutputFolder: () => undefined,
+      onPreview: () => undefined,
+      onRetry: () => undefined,
+    }));
+
+    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain(">Stop preview</button>");
+    expect(markup).not.toContain("Play preview");
+  });
+
+  it("passes the active preview state to the matching completed row", () => {
+    mockAudioPreview.activePath = "/output/active.mp4";
+    const controller = createQueueController({
+      initialSnapshot: snapshot([{
+        ...job("active", { kind: "completed", label: "Completed", outputPath: "/output/active.mp4" }),
+        outputPath: "/output/active.mp4",
+      }]),
+    });
+
+    const markup = renderToStaticMarkup(createElement(QueuePanel, { controller }));
+
+    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain(">Stop preview</button>");
+    mockAudioPreview.activePath = null;
   });
 
   it("renders completion warnings with technical details", () => {
@@ -492,6 +584,7 @@ describe("queue actions and accessible rendering", () => {
       onCancel: () => undefined,
       onMove: () => undefined,
       onOpenOutputFolder: () => undefined,
+      onPreview: () => undefined,
       onRetry: () => undefined,
     }));
 
@@ -502,7 +595,7 @@ describe("queue actions and accessible rendering", () => {
 
   it("disables every row action while one row action is pending", () => {
     const markup = renderToStaticMarkup(createElement(QueueRow, {
-      job: job("pending", { kind: "completed", label: "Completed", outputPath: "/output/pending.mp4" }),
+      job: { ...job("pending", { kind: "completed", label: "Completed", outputPath: "/output/pending.mp4" }), outputPath: "/output/pending.mp4" },
       pendingAction: "openOutputFolder",
       mutationPending: true,
       isFirst: true,
@@ -510,10 +603,11 @@ describe("queue actions and accessible rendering", () => {
       onCancel: () => undefined,
       onMove: () => undefined,
       onOpenOutputFolder: () => undefined,
+      onPreview: () => undefined,
       onRetry: () => undefined,
     }));
 
-    expect(markup.match(/disabled=""/g)).toHaveLength(5);
+    expect(markup.match(/disabled=""/g)).toHaveLength(6);
   });
 
   it("announces completion warnings in the live region message", () => {
@@ -547,5 +641,7 @@ describe("queue actions and accessible rendering", () => {
     expect(markup).not.toContain('aria-label="0 queue items"');
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain("No conversions in the queue yet.");
+    expect(markup.match(/<audio /g)).toHaveLength(1);
+    expect(markup).toContain('class="audio-preview"');
   });
 });

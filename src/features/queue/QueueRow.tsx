@@ -19,12 +19,15 @@ export type QueueRowProps = {
   canMoveDown?: boolean;
   canMoveUp?: boolean;
   job: QueueJob;
+  isPreviewActive?: boolean;
   mutationPending?: boolean;
   pendingAction?: QueueJobAction;
   onCancel: (jobId: string) => void;
   onMove: (jobId: string, direction: "up" | "down") => void;
   onOpenOutputFolder: (jobId: string, path: string) => void;
+  onPreview: (path: string) => void;
   onRetry: (jobId: string) => void;
+  previewError?: string | null;
 };
 
 function fileNameForJob(job: QueueJob): string {
@@ -45,16 +48,20 @@ export const QueueRow: FC<QueueRowProps> = memo(({
   canMoveDown = !isLast,
   canMoveUp = !isFirst,
   job,
+  isPreviewActive = false,
   mutationPending = false,
   pendingAction,
   onCancel,
   onMove,
   onOpenOutputFolder,
+  onPreview,
   onRetry,
+  previewError = null,
 }) => {
   const status = queueStatusFor(job.state);
   const percentage = progressPercent(job);
   const canOpen = canOpenOutput(job.state.kind) && job.outputPath !== null;
+  const previewPath = job.outputPath;
   const actionLocked = mutationPending || pendingAction !== undefined;
   const canMoveUpForJob = canReorderJob(job.state.kind) && canMoveUp;
   const canMoveDownForJob = canReorderJob(job.state.kind) && canMoveDown;
@@ -102,6 +109,18 @@ export const QueueRow: FC<QueueRowProps> = memo(({
         ) : null}
 
         <div className="queue-row__actions" role="group" aria-label={`${fileNameForJob(job)} actions`}>
+          {previewError ? <p className="inline-error" role="alert">{previewError}</p> : null}
+          {job.state.kind === "completed" && previewPath !== null ? (
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => onPreview(previewPath)}
+              disabled={actionLocked}
+              aria-label={isPreviewActive ? "Stop preview" : "Play preview"}
+            >
+              {isPreviewActive ? "Stop preview" : "Play preview"}
+            </button>
+          ) : null}
           <button
             className="button button--secondary"
             type="button"
