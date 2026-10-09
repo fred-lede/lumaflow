@@ -13,7 +13,7 @@ LumaFlow 使用 Tauri 2、React、TypeScript、Rust 與內嵌的 FFmpeg/FFprobe�
 | Windows 64-bit | windows-x64 | NSIS .exe、.msi | 由 release workflow 注入 |
 | Linux 64-bit | linux-x64 | .AppImage | 由 release workflow 注入 |
 
-目前 source checkout 只保留 src-tauri/binaries/darwin-arm64/ 的本機 FFmpeg/FFprobe。Windows、Linux 與 macOS Intel 的發布資產由 GitHub Actions 依照 scripts/ffmpeg-assets.json 下載、驗證後再打包；不要直接用系統 PATH 上的 FFmpeg 代替發布資產。
+FFmpeg/FFprobe 執行檔不進 Git。`prepare:ffmpeg` 會在本機 `tauri dev/build` 前，依照 scripts/ffmpeg-assets.json 下載並驗證目前平台的資產；正式發布則由 GitHub Actions 下載、驗證後再打包。不要直接用系統 PATH 上的 FFmpeg 代替發布資產。
 
 ## 2. 開發環境
 
@@ -128,6 +128,8 @@ resources/
 ~~~
 
 Release target、來源 URL、版本與 SHA-256 都鎖定在 [scripts/ffmpeg-assets.json](../scripts/ffmpeg-assets.json)。目前鎖定版本為 FFmpeg/FFprobe 8.1.2。
+
+`npm run tauri dev` 與 `npm run tauri build` 會在啟動前自動判斷目前平台，下載並驗證缺少的 FFmpeg/FFprobe 資產；若目錄中已有正確版本就會直接沿用。第一次建置需要網路連線，之後可離線重複建置。
 
 不要將 `which ffmpeg` 或 Homebrew 安裝的執行檔直接複製到
 `src-tauri/binaries/`。這類檔案通常會依賴建置者電腦上的

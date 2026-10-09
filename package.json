@@ -15,6 +15,7 @@
     "test:e2e": "vitest run --environment jsdom tests/e2e --maxWorkers=1",
     "test:ui": "vitest --ui",
     "fixtures": "node --experimental-strip-types scripts/generate-fixtures.ts",
+    "prepare:ffmpeg": "node --experimental-strip-types scripts/prepare-ffmpeg-assets.ts",
     "verify:ffmpeg-assets": "node --experimental-strip-types scripts/verify-ffmpeg-assets.ts",
     "check:licenses": "node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only",
     "tauri": "tauri"
