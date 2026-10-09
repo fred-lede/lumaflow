@@ -550,7 +550,7 @@ describe("queue actions and accessible rendering", () => {
       onRetry: () => undefined,
     }));
 
-    expect(completedMarkup).toContain('aria-label="Play preview"');
+    expect(completedMarkup).toContain('aria-label="Play preview for completed.mov"');
     expect(completedMarkup).toContain('aria-describedby="queue-row-completed-preview-file"');
     expect(completedMarkup).toContain('id="queue-row-completed-preview-file"');
     expect(completedMarkup).toContain(">Play preview</button>");
@@ -574,7 +574,7 @@ describe("queue actions and accessible rendering", () => {
       onRetry: () => undefined,
     }));
 
-    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain('aria-label="Stop preview for active.mov"');
     expect(markup).toContain('aria-describedby="queue-row-active-preview-file"');
     expect(markup).toContain(">Stop preview</button>");
     expect(markup).not.toContain("Play preview");
@@ -591,10 +591,27 @@ describe("queue actions and accessible rendering", () => {
 
     const markup = renderToStaticMarkup(createElement(QueuePanel, { controller }));
 
-    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain('aria-label="Stop preview for active.mov"');
     expect(markup).toContain('aria-describedby="queue-row-active-preview-file"');
     expect(markup).toContain(">Stop preview</button>");
     mockAudioPreview.activePath = null;
+  });
+
+  it("gives completed preview controls unique accessible names by filename", () => {
+    const first = {
+      ...job("first", { kind: "completed", label: "Completed", outputPath: "/output/first.mp4" }),
+      outputPath: "/output/first.mp4",
+    };
+    const second = {
+      ...job("second", { kind: "completed", label: "Completed", outputPath: "/output/second.mp4" }),
+      outputPath: "/output/second.mp4",
+    };
+    const controller = createQueueController({ initialSnapshot: snapshot([first, second]) });
+
+    const markup = renderToStaticMarkup(createElement(QueuePanel, { controller }));
+
+    expect(markup).toContain('aria-label="Play preview for first.mov"');
+    expect(markup).toContain('aria-label="Play preview for second.mov"');
   });
 
   it("stops and clears a pending preview when its queue row is removed", async () => {
@@ -609,7 +626,7 @@ describe("queue actions and accessible rendering", () => {
 
     render(createElement(QueuePanel, { controller }));
     await act(async () => {
-      screen.getByRole("button", { name: "Play preview" }).click();
+      screen.getByRole("button", { name: "Play preview for pending.mov" }).click();
     });
     await act(async () => {
       await controller.clearCompleted();
@@ -628,7 +645,7 @@ describe("queue actions and accessible rendering", () => {
 
     render(createElement(QueuePanel, { controller }));
     await act(async () => {
-      screen.getByRole("button", { name: "Play preview" }).click();
+      screen.getByRole("button", { name: "Play preview for errored.mov" }).click();
     });
     mockAudioPreview.error = previewError;
     act(() => controller.applySnapshot(snapshot([completed], 2)));

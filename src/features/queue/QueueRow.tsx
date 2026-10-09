@@ -62,7 +62,8 @@ export const QueueRow: FC<QueueRowProps> = memo(({
   const percentage = progressPercent(job);
   const canOpen = canOpenOutput(job.state.kind) && job.outputPath !== null;
   const previewPath = job.outputPath;
-  const previewLabel = isPreviewActive ? "Stop preview" : "Play preview";
+  const previewButtonText = isPreviewActive ? "Stop preview" : "Play preview";
+  const previewLabel = `${previewButtonText} for ${fileNameForJob(job)}`;
   const previewDescriptionId = `queue-row-${job.id}-preview-file`;
   const actionLocked = mutationPending || pendingAction !== undefined;
   const canMoveUpForJob = canReorderJob(job.state.kind) && canMoveUp;
@@ -123,7 +124,7 @@ export const QueueRow: FC<QueueRowProps> = memo(({
                 aria-label={previewLabel}
                 aria-describedby={previewDescriptionId}
               >
-                {previewLabel}
+                {previewButtonText}
               </button>
             </>
           ) : null}
