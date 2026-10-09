@@ -5,6 +5,7 @@ import { createElement } from "react";
 import AdvancedSettings from "./AdvancedSettings";
 import {
   defaultConversionSettings,
+  codecOptionsForFormat,
   formatToOutputSettings,
   qualityPresets,
   supportedOutputFormats,
@@ -56,6 +57,29 @@ describe("useConversionSettings operations", () => {
     expect(settings.channels).toBe(2);
   });
 
+  it("resets codec and bitrate when switching output families", () => {
+    const current = updateConversionSettings(defaultConversionSettings, {
+      codec: "libx264",
+      bitrate: 192,
+    });
+    const settings = updateConversionSettings(current, { format: "mp3" });
+
+    expect(settings.codec).toBeNull();
+    expect(settings.bitrate).toBeNull();
+  });
+
+  it("provides closed codec menus for supported output formats", () => {
+    expect(codecOptionsForFormat("mp4")).toEqual([
+      { value: "", label: "Backend default" },
+      { value: "libx264", label: "H.264 (libx264)" },
+      { value: "libx265", label: "H.265 (libx265)" },
+    ]);
+    expect(codecOptionsForFormat("mp3")).toEqual([
+      { value: "", label: "Backend default" },
+      { value: "libmp3lame", label: "MP3 (libmp3lame)" },
+    ]);
+  });
+
   it("maps the controlled model to the backend contract", () => {
     const settings = updateConversionSettings(defaultConversionSettings, {
       format: "flac",
@@ -97,5 +121,7 @@ describe("useConversionSettings operations", () => {
     expect(collapsed).not.toContain("Codec");
     expect(expanded).toContain("Codec");
     expect(expanded).toContain("Sample rate (Hz)");
+    expect(expanded).toContain("<select");
+    expect(expanded).not.toContain('type="number"');
   });
 });

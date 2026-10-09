@@ -1,6 +1,16 @@
 import type { FC } from "react";
 
-import type { ConversionSettings } from "./useConversionSettings";
+import {
+  bitrateOptions,
+  channelOptions,
+  codecOptionsForFormat,
+  frameRateOptions,
+  heightOptions,
+  sampleRateOptions,
+  widthOptions,
+  type ConversionSettings,
+  type SelectOption,
+} from "./useConversionSettings";
 
 export type AdvancedSettingsProps = {
   expanded: boolean;
@@ -14,80 +24,59 @@ export const AdvancedSettings: FC<AdvancedSettingsProps> = ({ expanded, settings
   }
 
   const audioOutput = new Set(["mp3", "m4a", "wav", "flac", "ogg"]).has(settings.format);
+  const codecOptions = codecOptionsForFormat(settings.format);
+  const codecValue = settings.codec ?? "";
+  const resolvedCodecOptions = codecOptions.some((option) => option.value === codecValue)
+    ? codecOptions
+    : [...codecOptions, { value: codecValue, label: codecValue }];
+
+  const numberValue = (value: number | null): string => (value === null ? "" : String(value));
+  const numberOrNull = (value: string): number | null => (value === "" ? null : Number(value));
+
+  const renderSelect = (
+    label: string,
+    value: string,
+    options: SelectOption[],
+    onChangeValue: (value: string) => void,
+  ) => (
+    <label className="field">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChangeValue(event.target.value)}>
+        {options.map((option) => (
+          <option key={`${label}-${option.value}`} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 
   return (
     <div className="advanced-settings" id="advanced-settings-panel">
       <div className="field-grid">
-        <label className="field">
-          <span>Codec</span>
-          <input
-            value={settings.codec ?? ""}
-            placeholder="Backend default"
-            onChange={(event) => onChange({ codec: event.target.value || null })}
-          />
-        </label>
-        <label className="field">
-          <span>Bitrate (kbps)</span>
-          <input
-            type="number"
-            min="1"
-            value={settings.bitrate ?? ""}
-            placeholder="Auto"
-            onChange={(event) => onChange({ bitrate: event.target.value ? Number(event.target.value) : null })}
-          />
-        </label>
+        {renderSelect("Codec", codecValue, resolvedCodecOptions, (value) => onChange({ codec: value || null }))}
+        {renderSelect("Audio bitrate", numberValue(settings.bitrate), bitrateOptions, (value) =>
+          onChange({ bitrate: numberOrNull(value) }),
+        )}
         {!audioOutput && (
           <>
-            <label className="field">
-              <span>Width</span>
-              <input
-                type="number"
-                min="1"
-                value={settings.width ?? ""}
-                placeholder="Source"
-                onChange={(event) => onChange({ width: event.target.value ? Number(event.target.value) : null })}
-              />
-            </label>
-            <label className="field">
-              <span>Height</span>
-              <input
-                type="number"
-                min="1"
-                value={settings.height ?? ""}
-                placeholder="Source"
-                onChange={(event) => onChange({ height: event.target.value ? Number(event.target.value) : null })}
-              />
-            </label>
-            <label className="field">
-              <span>Frame rate</span>
-              <input
-                value={settings.frameRate ?? ""}
-                placeholder="Source"
-                onChange={(event) => onChange({ frameRate: event.target.value || null })}
-              />
-            </label>
+            {renderSelect("Width", numberValue(settings.width), widthOptions, (value) =>
+              onChange({ width: numberOrNull(value) }),
+            )}
+            {renderSelect("Height", numberValue(settings.height), heightOptions, (value) =>
+              onChange({ height: numberOrNull(value) }),
+            )}
+            {renderSelect("Frame rate", settings.frameRate ?? "", frameRateOptions, (value) =>
+              onChange({ frameRate: value || null }),
+            )}
           </>
         )}
-        <label className="field">
-          <span>Sample rate (Hz)</span>
-          <input
-            type="number"
-            min="1"
-            value={settings.sampleRate ?? ""}
-            placeholder="Source"
-            onChange={(event) => onChange({ sampleRate: event.target.value ? Number(event.target.value) : null })}
-          />
-        </label>
-        <label className="field">
-          <span>Channels</span>
-          <input
-            type="number"
-            min="1"
-            value={settings.channels ?? ""}
-            placeholder="Source"
-            onChange={(event) => onChange({ channels: event.target.value ? Number(event.target.value) : null })}
-          />
-        </label>
+        {renderSelect("Sample rate (Hz)", numberValue(settings.sampleRate), sampleRateOptions, (value) =>
+          onChange({ sampleRate: numberOrNull(value) }),
+        )}
+        {renderSelect("Channels", numberValue(settings.channels), channelOptions, (value) =>
+          onChange({ channels: numberOrNull(value) }),
+        )}
       </div>
     </div>
   );

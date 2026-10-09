@@ -65,6 +65,16 @@ export function consumeDroppedPaths(): Promise<string[]> {
   return invokeLumaFlow<string[]>("consume_dropped_paths");
 }
 
+async function consumeDroppedPathsAfterNativeEvent(): Promise<string[]> {
+  const firstAttempt = await consumeDroppedPaths();
+  if (firstAttempt.length > 0) {
+    return firstAttempt;
+  }
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return consumeDroppedPaths();
+}
+
 export function registerFileDropHandler(handler: (paths: string[]) => void): Promise<UnlistenFn> {
   try {
     return getCurrentWebview().onDragDropEvent(async (event) => {
@@ -72,7 +82,7 @@ export function registerFileDropHandler(handler: (paths: string[]) => void): Pro
         return;
       }
 
-      const paths = await consumeDroppedPaths();
+      const paths = await consumeDroppedPathsAfterNativeEvent();
       if (paths.length > 0) {
         handler(paths);
       }

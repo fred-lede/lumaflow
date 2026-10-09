@@ -55,6 +55,27 @@ describe("typed Tauri wrappers", () => {
     expect(unlisten).toHaveBeenCalledOnce();
   });
 
+  it("retries once when the native event arrives before Rust queues its paths", async () => {
+    let dropHandler: ((event: { payload: { type: string } }) => void | Promise<void>) | undefined;
+    const onDragDropEvent = vi.fn(async (handler: typeof dropHandler) => {
+      dropHandler = handler;
+      return vi.fn();
+    });
+    mockedGetCurrentWebview.mockReturnValue({ onDragDropEvent });
+    mockedInvoke
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(["/media/queued-after-event.mp4"]);
+    const handler = vi.fn();
+
+    await registerFileDropHandler(handler).then(async (cleanup) => {
+      await dropHandler?.({ payload: { type: "drop" } });
+      cleanup();
+    });
+
+    expect(mockedInvoke).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledWith(["/media/queued-after-event.mp4"]);
+  });
+
   it("passes typed file paths to analyze_files", async () => {
     mockedInvoke.mockResolvedValue([]);
 
