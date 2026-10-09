@@ -181,6 +181,19 @@ jobs:
             --asset-dir "src-tauri/binaries/${{ matrix.target }}" \
             --archive "src-tauri/binaries/${{ matrix.archive_file }}"
 
+      - name: Reject machine-local macOS FFmpeg dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for tool in \
+            "src-tauri/binaries/${{ matrix.target }}/ffmpeg" \
+            "src-tauri/binaries/${{ matrix.target }}/ffprobe"; do
+            if otool -L "$tool" | grep -Eq '/(opt/homebrew|usr/local/Cellar)/'; then
+              echo "Refusing to package a Homebrew-linked media tool: $tool"
+              exit 1
+            fi
+          done
+
       - name: Generate and verify target third-party notice
         shell: bash
         run: |

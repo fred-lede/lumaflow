@@ -129,6 +129,34 @@ resources/
 
 Release target、來源 URL、版本與 SHA-256 都鎖定在 [scripts/ffmpeg-assets.json](../scripts/ffmpeg-assets.json)。目前鎖定版本為 FFmpeg/FFprobe 8.1.2。
 
+不要將 `which ffmpeg` 或 Homebrew 安裝的執行檔直接複製到
+`src-tauri/binaries/`。這類檔案通常會依賴建置者電腦上的
+`/opt/homebrew` 或 `/usr/local/Cellar`，換到另一台 Mac 後就會出現
+`FFprobe could not be started`。macOS release workflow 會只使用上述 manifest
+鎖定的獨立資產，並拒絕含有這些本機路徑的執行檔。
+
+若要在 Apple Silicon Mac 本機建置，請使用與 release workflow 相同的 archive：
+
+~~~sh
+target=darwin-arm64
+asset_dir="src-tauri/binaries/$target"
+archive="$asset_dir/darwin_arm64.zip"
+mkdir -p "$asset_dir"
+curl --fail --location --retry 3 \
+  https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/darwin_arm64.zip \
+  --output "$archive"
+printf '%s  %s\n' \
+  842ba18551e73f1f7f0e92408b210503fc9a13b88182db2014fd553bce990895 \
+  "$archive" | shasum -a 256 -c -
+work="$(mktemp -d)"
+unzip -q "$archive" -d "$work"
+cp "$work/darwin_arm64/ffmpeg" "$asset_dir/ffmpeg"
+cp "$work/darwin_arm64/ffprobe" "$asset_dir/ffprobe"
+chmod 755 "$asset_dir/ffmpeg" "$asset_dir/ffprobe"
+~~~
+
+下載後請依照下方驗證命令檢查版本與 archive checksum，再進行 Tauri 建置。
+
 ### 驗證某個目標的資產
 
 先將 archive 與解壓後的執行檔放到目標目錄，再執行：
