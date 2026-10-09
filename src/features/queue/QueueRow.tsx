@@ -62,6 +62,7 @@ export const QueueRow: FC<QueueRowProps> = memo(({
   const percentage = progressPercent(job);
   const canOpen = canOpenOutput(job.state.kind) && job.outputPath !== null;
   const previewPath = job.outputPath;
+  const previewLabel = `${isPreviewActive ? "Stop" : "Play"} preview for ${fileNameForJob(job)}`;
   const actionLocked = mutationPending || pendingAction !== undefined;
   const canMoveUpForJob = canReorderJob(job.state.kind) && canMoveUp;
   const canMoveDownForJob = canReorderJob(job.state.kind) && canMoveDown;
@@ -116,7 +117,7 @@ export const QueueRow: FC<QueueRowProps> = memo(({
               type="button"
               onClick={() => onPreview(previewPath)}
               disabled={actionLocked}
-              aria-label={isPreviewActive ? "Stop preview" : "Play preview"}
+              aria-label={previewLabel}
             >
               {isPreviewActive ? "Stop preview" : "Play preview"}
             </button>

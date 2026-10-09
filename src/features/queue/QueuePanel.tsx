@@ -69,11 +69,12 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
   const completedJobs = jobs.filter((job) => job.state.kind === "completed");
 
   useEffect(() => {
-    if (preview.activePath !== null && !jobs.some((job) => job.outputPath === preview.activePath)) {
+    const trackedPreviewPath = preview.activePath ?? previewErrorPath;
+    if (trackedPreviewPath !== null && !jobs.some((job) => job.outputPath === trackedPreviewPath)) {
       preview.stop();
       setPreviewErrorPath(null);
     }
-  }, [jobs, preview.activePath, preview.stop]);
+  }, [jobs, preview.activePath, preview.stop, previewErrorPath]);
 
   useEffect(() => {
     const messages: string[] = [];

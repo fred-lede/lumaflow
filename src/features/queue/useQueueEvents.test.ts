@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
+
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JobEvent, QueueJob, QueueSnapshot } from "../../domain/job";
 
@@ -25,6 +28,14 @@ import {
   subscribeToQueueEvents,
   type QueueCommandAdapter,
 } from "./useQueueEvents";
+
+afterEach(() => {
+  cleanup();
+  mockAudioPreview.activePath = null;
+  mockAudioPreview.error = null;
+  mockAudioPreview.play.mockClear();
+  mockAudioPreview.stop.mockClear();
+});
 
 function job(
   id: string,
@@ -529,7 +540,7 @@ describe("queue actions and accessible rendering", () => {
       onRetry: () => undefined,
     }));
 
-    expect(completedMarkup).toContain('aria-label="Play preview"');
+    expect(completedMarkup).toContain('aria-label="Play preview for completed.mov"');
     expect(completedMarkup).toContain(">Play preview</button>");
     expect(queuedMarkup).not.toContain("Play preview");
     expect(failedMarkup).not.toContain("Play preview");
@@ -549,7 +560,7 @@ describe("queue actions and accessible rendering", () => {
       onRetry: () => undefined,
     }));
 
-    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain('aria-label="Stop preview for active.mov"');
     expect(markup).toContain(">Stop preview</button>");
     expect(markup).not.toContain("Play preview");
   });
@@ -565,9 +576,53 @@ describe("queue actions and accessible rendering", () => {
 
     const markup = renderToStaticMarkup(createElement(QueuePanel, { controller }));
 
-    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain('aria-label="Stop preview for active.mov"');
     expect(markup).toContain(">Stop preview</button>");
     mockAudioPreview.activePath = null;
+  });
+
+  it("stops and clears a pending preview when its queue row is removed", async () => {
+    const completed = {
+      ...job("pending", { kind: "completed", label: "Completed", outputPath: "/output/pending.mp4" }),
+      outputPath: "/output/pending.mp4",
+    };
+    const controller = createQueueController({
+      initialSnapshot: snapshot([completed]),
+      commands: { clearCompleted: vi.fn(async () => snapshot([], 2)) },
+    });
+
+    render(createElement(QueuePanel, { controller }));
+    await act(async () => {
+      screen.getByText("Play preview").click();
+    });
+    await act(async () => {
+      await controller.clearCompleted();
+    });
+
+    expect(mockAudioPreview.stop).toHaveBeenCalledOnce();
+  });
+
+  it("stops and clears an errored preview when its queue row is removed", async () => {
+    const completed = {
+      ...job("errored", { kind: "completed", label: "Completed", outputPath: "/output/errored.mp4" }),
+      outputPath: "/output/errored.mp4",
+    };
+    const previewError = "Preview unavailable. The format or codec is not supported by this platform.";
+    const controller = createQueueController({ initialSnapshot: snapshot([completed]) });
+
+    render(createElement(QueuePanel, { controller }));
+    await act(async () => {
+      screen.getByText("Play preview").click();
+    });
+    mockAudioPreview.error = previewError;
+    act(() => controller.applySnapshot(snapshot([completed], 2)));
+    expect(screen.getByText(previewError)).not.toBeNull();
+
+    act(() => controller.applySnapshot(snapshot([], 3)));
+    expect(mockAudioPreview.stop).toHaveBeenCalledOnce();
+    act(() => controller.applySnapshot(snapshot([completed], 4)));
+
+    expect(screen.queryByText(previewError)).toBeNull();
   });
 
   it("renders completion warnings with technical details", () => {
