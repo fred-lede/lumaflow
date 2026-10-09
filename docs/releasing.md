@@ -1,5 +1,8 @@
 # LumaFlow release verification
 
+For development setup, local installation, platform prerequisites, and end-user
+installation, see [installation-and-deployment.md](installation-and-deployment.md).
+
 Release binaries are never committed to this repository. The release workflow
 downloads the exact archive recorded in `scripts/ffmpeg-assets.json`, verifies
 its SHA-256 digest, extracts one FFmpeg and one FFprobe executable for the
