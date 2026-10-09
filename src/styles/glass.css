@@ -130,7 +130,8 @@ p {
 }
 
 .workspace-main {
-  width: min(100% - 2rem, 76rem);
+  width: calc(100% - 2rem);
+  max-width: 90rem;
   margin: 0 auto;
   min-height: calc(100dvh - 4.75rem);
   padding: clamp(var(--space-5), 4vh, var(--space-10)) 0;
@@ -163,10 +164,27 @@ h1 {
   font-size: var(--font-size-body);
 }
 
-.workspace-grid {
+.workspace-layout {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: var(--space-5);
+  align-items: start;
+}
+
+.workspace-source-column {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.workspace-settings-column {
+  min-width: 0;
+}
+
+@media (min-width: 52rem) {
+  .workspace-layout {
+    grid-template-columns: minmax(18rem, 0.85fr) minmax(30rem, 1.15fr);
+  }
 }
 
 .glass-panel {
@@ -180,6 +198,12 @@ h1 {
 .workspace-card {
   min-height: 20rem;
   padding: clamp(var(--space-5), 4vw, var(--space-8));
+}
+
+.workspace-card--settings {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 h2 {
@@ -473,7 +497,7 @@ input::placeholder {
 
 @media (min-width: 960px) {
   .workspace-card--settings .output-settings {
-    grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.8fr);
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.8fr);
     align-items: start;
   }
 
@@ -516,9 +540,17 @@ input::placeholder {
   border-top: var(--border-width) solid var(--color-border);
 }
 
+.workspace-card--settings .action-row {
+  margin-top: auto;
+}
+
 .queue-panel {
   margin-top: var(--space-5);
   padding: clamp(var(--space-5), 4vw, var(--space-8));
+}
+
+.workspace-source-column .queue-panel {
+  margin-top: 0;
 }
 
 .queue-panel__intro {
@@ -790,8 +822,16 @@ input::placeholder {
     flex-wrap: wrap;
   }
 
-  .workspace-grid {
+  .workspace-layout {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-source-column {
+    order: 1;
+  }
+
+  .workspace-settings-column {
+    order: 2;
   }
 
   .drop-zone,

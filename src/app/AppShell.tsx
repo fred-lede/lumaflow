@@ -125,75 +125,80 @@ export const AppShell: FC<AppShellProps> = ({
         <div className="workspace-intro">
           <div>
             <p className="eyebrow">Workspace</p>
-            <h1 id="app-title">LumaFlow</h1>
-            <p className="workspace-title">Prepare your next conversion</p>
+            <h1 id="app-title" className="workspace-title">
+              Convert your media
+            </h1>
             <p className="supporting-text">
-              Add media, choose an output, and review the queue before processing locally.
+              Add files, choose an output, and review the queue before processing locally.
             </p>
           </div>
           <StatusBadge status="ready" label="Ready for files" />
         </div>
 
-        <div className="workspace-grid">
-          <GlassPanel className="workspace-card" labelledBy="sources-title" role="region">
-            <div className="card-heading">
-              <div>
-                <p className="eyebrow">Source media</p>
-                <h2 id="sources-title">Files</h2>
+        <div className="workspace-layout">
+          <div className="workspace-source-column">
+            <GlassPanel className="workspace-card" labelledBy="sources-title" role="region">
+              <div className="card-heading">
+                <div>
+                  <p className="eyebrow">Source media</p>
+                  <h2 id="sources-title">Files</h2>
+                </div>
+                <span className="card-step" aria-hidden="true">
+                  01
+                </span>
               </div>
-              <span className="card-step" aria-hidden="true">
-                01
-              </span>
-            </div>
-            <p className="supporting-text">
-              Choose one or more files to inspect their format and duration before conversion.
-            </p>
-            <DropZone pendingCount={intake.pendingCount} onSelectFiles={() => void intake.chooseFiles()} />
-            <SourceFileList sources={intake.sources} onRemove={intake.removeSource} />
-          </GlassPanel>
+              <p className="supporting-text">
+                Choose one or more files to inspect their format and duration before conversion.
+              </p>
+              <DropZone pendingCount={intake.pendingCount} onSelectFiles={() => void intake.chooseFiles()} />
+              <SourceFileList sources={intake.sources} onRemove={intake.removeSource} />
+            </GlassPanel>
 
-          <GlassPanel className="workspace-card workspace-card--settings" labelledBy="settings-title" role="region">
-            <div className="card-heading">
-              <div>
-                <p className="eyebrow">Configuration</p>
-                <h2 id="settings-title">Output settings</h2>
+            <QueuePanel controller={queue.controller} />
+          </div>
+
+          <div className="workspace-settings-column">
+            <GlassPanel className="workspace-card workspace-card--settings" labelledBy="settings-title" role="region">
+              <div className="card-heading">
+                <div>
+                  <p className="eyebrow">Configuration</p>
+                  <h2 id="settings-title">Output settings</h2>
+                </div>
+                <span className="card-step" aria-hidden="true">
+                  02
+                </span>
               </div>
-              <span className="card-step" aria-hidden="true">
-                02
-              </span>
-            </div>
-            <p className="supporting-text">
-              Lossless-first is the default. Expand advanced settings only when the source needs a custom stream.
-            </p>
-            <OutputSettings
-              advancedOpen={conversion.advancedOpen}
-              error={settingsError ?? intake.error}
-              settings={conversion.settings}
-              onChange={conversion.setSettings}
-              onSelectOutputFolder={() => void handleSelectOutputFolder()}
-              onToggleAdvanced={conversion.toggleAdvanced}
-            />
-            <div className="action-row">
-              <span className="supporting-text">
-                {intake.pendingCount > 0
-                  ? `Analyzing ${intake.pendingCount} source${intake.pendingCount === 1 ? "" : "s"}…`
-                  : readySourceCount === 0
-                    ? "Add an analyzed source to begin."
-                    : `${readySourceCount} source${readySourceCount === 1 ? "" : "s"} ready`}
-              </span>
-              <button
-                className="button button--primary"
-                type="button"
-                disabled={!intake.canStart || conversion.settings.outputDirectory.length === 0}
-                onClick={() => void handleStartConversion()}
-              >
-                Start conversion
-              </button>
-            </div>
-          </GlassPanel>
+              <p className="supporting-text">
+                Lossless-first is the default. Expand advanced settings only when the source needs a custom stream.
+              </p>
+              <OutputSettings
+                advancedOpen={conversion.advancedOpen}
+                error={settingsError ?? intake.error}
+                settings={conversion.settings}
+                onChange={conversion.setSettings}
+                onSelectOutputFolder={() => void handleSelectOutputFolder()}
+                onToggleAdvanced={conversion.toggleAdvanced}
+              />
+              <div className="action-row">
+                <span className="supporting-text">
+                  {intake.pendingCount > 0
+                    ? `Analyzing ${intake.pendingCount} source${intake.pendingCount === 1 ? "" : "s"}…`
+                    : readySourceCount === 0
+                      ? "Add an analyzed source to begin."
+                      : `${readySourceCount} source${readySourceCount === 1 ? "" : "s"} ready`}
+                </span>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  disabled={!intake.canStart || conversion.settings.outputDirectory.length === 0}
+                  onClick={() => void handleStartConversion()}
+                >
+                  Start conversion
+                </button>
+              </div>
+            </GlassPanel>
+          </div>
         </div>
-
-        <QueuePanel controller={queue.controller} />
 
         <div
           className="sr-only"
