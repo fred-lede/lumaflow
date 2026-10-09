@@ -137,7 +137,7 @@ export const AppShell: FC<AppShellProps> = ({
 
         <div className="workspace-layout">
           <div className="workspace-source-column">
-            <GlassPanel className="workspace-card" labelledBy="sources-title" role="region">
+            <GlassPanel className="workspace-card workspace-source-card" labelledBy="sources-title" role="region">
               <div className="card-heading">
                 <div>
                   <p className="eyebrow">Source media</p>
@@ -158,7 +158,11 @@ export const AppShell: FC<AppShellProps> = ({
           </div>
 
           <div className="workspace-settings-column">
-            <GlassPanel className="workspace-card workspace-card--settings" labelledBy="settings-title" role="region">
+            <GlassPanel
+              className="workspace-card workspace-card--settings workspace-settings-card"
+              labelledBy="settings-title"
+              role="region"
+            >
               <div className="card-heading">
                 <div>
                   <p className="eyebrow">Configuration</p>

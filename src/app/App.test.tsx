@@ -36,8 +36,9 @@ describe("App", () => {
     expect(sourceColumn?.classList.contains("workspace-source-column")).toBe(true);
     expect(settingsColumn?.classList.contains("workspace-settings-column")).toBe(true);
     expect(sourceColumn?.querySelector(".workspace-card:not(.workspace-card--settings)")).not.toBeNull();
+    expect(sourceColumn?.querySelector(".workspace-source-card")).not.toBeNull();
     expect(sourceColumn?.querySelectorAll(".queue-panel")).toHaveLength(1);
-    expect(settingsColumn?.querySelector(".workspace-card--settings")).not.toBeNull();
+    expect(settingsColumn?.querySelector(".workspace-card--settings.workspace-settings-card")).not.toBeNull();
 
     const layout = layouts[0];
     if (!layout || !sourceColumn || !queuePanel || !settingsColumn) {

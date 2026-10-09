@@ -13,6 +13,7 @@ const mockAudioPreview = vi.hoisted(() => ({
   error: null as string | null,
   handleEnded: vi.fn(),
   handleError: vi.fn(),
+  prepare: vi.fn(async () => undefined),
   play: vi.fn(async () => undefined),
   stop: vi.fn(),
 }));
@@ -34,6 +35,7 @@ afterEach(() => {
   mockAudioPreview.activePath = null;
   mockAudioPreview.error = null;
   mockAudioPreview.play.mockClear();
+  mockAudioPreview.prepare.mockClear();
   mockAudioPreview.stop.mockClear();
 });
 
@@ -617,6 +619,21 @@ describe("queue actions and accessible rendering", () => {
 
     expect(markup).toContain('aria-label="Play preview for first.mov"');
     expect(markup).toContain('aria-label="Play preview for second.mov"');
+  });
+
+  it("prepares completed output files for user-initiated preview", async () => {
+    const completed = {
+      ...job("ready", { kind: "completed", label: "Completed", outputPath: "/output/ready.mp3" }),
+      outputPath: "/output/ready.mp3",
+    };
+    const controller = createQueueController({ initialSnapshot: snapshot([completed]) });
+
+    render(createElement(QueuePanel, { controller }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockAudioPreview.prepare).toHaveBeenCalledWith("/output/ready.mp3");
   });
 
   it("stops and clears a pending preview when its queue row is removed", async () => {

@@ -70,6 +70,25 @@ describe("useAudioPreview", () => {
     expect(result.current.activePath).toBe("/output/clip.mp3");
   });
 
+  it("plays immediately after the output has been prepared", async () => {
+    const { result, adapter, audio } = renderPreview({
+      authorizeOutputPreview: vi.fn(async () => "/authorized/clip.mp3"),
+    });
+
+    await act(async () => {
+      await result.current.prepare("/output/clip.mp3");
+    });
+
+    const playPromise = result.current.play("/output/clip.mp3");
+
+    expect(adapter.authorizeOutputPreview).toHaveBeenCalledOnce();
+    expect(audio.play).toHaveBeenCalledOnce();
+    await act(async () => {
+      await playPromise;
+    });
+    expect(result.current.activePath).toBe("/output/clip.mp3");
+  });
+
   it("stops an active preview when the same path is played again", async () => {
     const { result, audio } = renderPreview();
 

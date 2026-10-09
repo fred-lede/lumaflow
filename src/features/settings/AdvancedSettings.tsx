@@ -52,15 +52,12 @@ export const AdvancedSettings: FC<AdvancedSettingsProps> = ({ expanded, settings
   );
 
   return (
-    <div className="advanced-settings" id="advanced-settings-panel">
-      <div className="field-grid">
-        {renderSelect("Codec", codecValue, resolvedCodecOptions, (value) => onChange({ codec: value || null }))}
-        {!new Set(["wav", "flac"]).has(settings.format) &&
-          renderSelect("Audio bitrate", numberValue(settings.bitrate), bitrateOptions, (value) =>
-            onChange({ bitrate: numberOrNull(value) }),
-          )}
-        {!audioOutput && (
-          <>
+    <div className="advanced-settings" id="advanced-settings-panel-content">
+      {!audioOutput && (
+        <fieldset className="advanced-settings__group" data-settings-group="video">
+          <legend>Video</legend>
+          <div className="field-grid">
+            {renderSelect("Codec", codecValue, resolvedCodecOptions, (value) => onChange({ codec: value || null }))}
             {renderSelect("Width", numberValue(settings.width), widthOptions, (value) =>
               onChange({ width: numberOrNull(value) }),
             )}
@@ -70,15 +67,27 @@ export const AdvancedSettings: FC<AdvancedSettingsProps> = ({ expanded, settings
             {renderSelect("Frame rate", settings.frameRate ?? "", frameRateOptions, (value) =>
               onChange({ frameRate: value || null }),
             )}
-          </>
-        )}
-        {renderSelect("Sample rate (Hz)", numberValue(settings.sampleRate), sampleRateOptions, (value) =>
-          onChange({ sampleRate: numberOrNull(value) }),
-        )}
-        {renderSelect("Channels", numberValue(settings.channels), channelOptions, (value) =>
-          onChange({ channels: numberOrNull(value) }),
-        )}
-      </div>
+          </div>
+        </fieldset>
+      )}
+
+      <fieldset className="advanced-settings__group" data-settings-group="audio">
+        <legend>Audio</legend>
+        <div className="field-grid">
+          {audioOutput &&
+            renderSelect("Codec", codecValue, resolvedCodecOptions, (value) => onChange({ codec: value || null }))}
+          {!new Set(["wav", "flac"]).has(settings.format) &&
+            renderSelect("Audio bitrate", numberValue(settings.bitrate), bitrateOptions, (value) =>
+              onChange({ bitrate: numberOrNull(value) }),
+            )}
+          {renderSelect("Sample rate (Hz)", numberValue(settings.sampleRate), sampleRateOptions, (value) =>
+            onChange({ sampleRate: numberOrNull(value) }),
+          )}
+          {renderSelect("Channels", numberValue(settings.channels), channelOptions, (value) =>
+            onChange({ channels: numberOrNull(value) }),
+          )}
+        </div>
+      </fieldset>
     </div>
   );
 };

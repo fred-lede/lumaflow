@@ -67,6 +67,19 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     .filter((job): job is NonNullable<typeof job> => job !== undefined);
   const activeJobs = jobs.filter((job) => canCancelJob(job.state.kind));
   const completedJobs = jobs.filter((job) => job.state.kind === "completed");
+  const completedPreviewKey = completedJobs
+    .map((job) => job.outputPath)
+    .filter((path): path is string => path !== null)
+    .join("\u0000");
+
+  useEffect(() => {
+    if (!completedPreviewKey) {
+      return;
+    }
+    for (const path of completedPreviewKey.split("\u0000")) {
+      void preview.prepare(path).catch(() => undefined);
+    }
+  }, [completedPreviewKey, preview.prepare]);
 
   useEffect(() => {
     const trackedPreviewPath = preview.activePath ?? previewErrorPath;

@@ -26,42 +26,67 @@ export const OutputSettings: FC<OutputSettingsProps> = ({
 }) => {
   return (
     <div className="output-settings">
-      <div className="field-row">
-        <label className="field field--wide">
-          <span>Output folder</span>
-          <div className="input-with-action">
-            <input value={settings.outputDirectory} readOnly placeholder="Choose a destination folder" />
-            <button className="button button--secondary" type="button" onClick={onSelectOutputFolder}>
-              Browse
-            </button>
-          </div>
-        </label>
+      <div className="settings-primary">
+        <div className="field-row">
+          <label className="field field--wide">
+            <span>Output folder</span>
+            <div className="input-with-action">
+              <input value={settings.outputDirectory} readOnly placeholder="Choose a destination folder" />
+              <button className="button button--secondary" type="button" onClick={onSelectOutputFolder}>
+                Browse
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="field-grid">
+          <label className="field">
+            <span>Format</span>
+            <select value={settings.format} onChange={(event) => onChange({ format: event.target.value as ConversionSettings["format"] })}>
+              {supportedOutputFormats.map((format) => (
+                <option key={format.value} value={format.value}>
+                  {format.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Processing mode</span>
+            <select value={settings.mode} onChange={(event) => onChange({ mode: event.target.value as ConversionSettings["mode"] })}>
+              <option value="lossless-first">Lossless first</option>
+              <option value="transcode">Always transcode</option>
+            </select>
+          </label>
+        </div>
       </div>
 
-      <div className="field-grid">
-        <label className="field">
-          <span>Format</span>
-          <select value={settings.format} onChange={(event) => onChange({ format: event.target.value as ConversionSettings["format"] })}>
-            {supportedOutputFormats.map((format) => (
-              <option key={format.value} value={format.value}>
-                {format.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Processing mode</span>
-          <select value={settings.mode} onChange={(event) => onChange({ mode: event.target.value as ConversionSettings["mode"] })}>
-            <option value="lossless-first">Lossless first</option>
-            <option value="transcode">Always transcode</option>
-          </select>
-        </label>
-      </div>
+      <section className="advanced-settings-panel" aria-labelledby="advanced-settings-title">
+        <button
+          className="advanced-toggle"
+          type="button"
+          aria-expanded={advancedOpen}
+          aria-controls={advancedOpen ? "advanced-settings-panel-content" : undefined}
+          onClick={onToggleAdvanced}
+        >
+          <span className="advanced-toggle__copy">
+            <span className="advanced-toggle__title" id="advanced-settings-title">
+              Advanced settings
+            </span>
+            <span className="advanced-toggle__summary">
+              {advancedOpen ? "Optional overrides" : "Using source values"}
+            </span>
+          </span>
+          <span className="advanced-toggle__icon" aria-hidden="true">
+            {advancedOpen ? "⌃" : "⌄"}
+          </span>
+        </button>
+        <AdvancedSettings expanded={advancedOpen} settings={settings} onChange={onChange} />
+      </section>
 
       <fieldset className="preset-fieldset">
         <legend>Quality preset</legend>
         <div className="preset-grid">
-            {qualityPresetsForFormat(settings.format).map((preset) => (
+          {qualityPresetsForFormat(settings.format).map((preset) => (
             <label className={`preset-option${settings.preset === preset.value ? " preset-option--selected" : ""}`} key={preset.value}>
               <input
                 type="radio"
@@ -78,18 +103,6 @@ export const OutputSettings: FC<OutputSettingsProps> = ({
           ))}
         </div>
       </fieldset>
-
-      <button
-        className="advanced-toggle"
-        type="button"
-        aria-expanded={advancedOpen}
-        aria-controls="advanced-settings-panel"
-        onClick={onToggleAdvanced}
-      >
-        <span>{advancedOpen ? "Hide advanced settings" : "Show advanced settings"}</span>
-        <span aria-hidden="true">{advancedOpen ? "−" : "+"}</span>
-      </button>
-      <AdvancedSettings expanded={advancedOpen} settings={settings} onChange={onChange} />
 
       {error && (
         <p className="inline-error" role="alert">
