@@ -152,7 +152,7 @@ export const AppShell: FC<AppShellProps> = ({
             <SourceFileList sources={intake.sources} onRemove={intake.removeSource} />
           </GlassPanel>
 
-          <GlassPanel className="workspace-card" labelledBy="settings-title" role="region">
+          <GlassPanel className="workspace-card workspace-card--settings" labelledBy="settings-title" role="region">
             <div className="card-heading">
               <div>
                 <p className="eyebrow">Configuration</p>

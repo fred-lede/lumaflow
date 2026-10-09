@@ -34,7 +34,11 @@ pub fn run() {
                 let state = webview.state::<commands::queue::BackendState>();
                 let authorized_paths = state.register_trusted_dropped_paths(paths);
                 if !authorized_paths.is_empty() {
-                    let _ = webview.emit(AUTHORIZED_FILE_DROP_EVENT, authorized_paths);
+                    let _ = webview.emit_to(
+                        webview.label(),
+                        AUTHORIZED_FILE_DROP_EVENT,
+                        authorized_paths,
+                    );
                 }
             }
         })
@@ -80,6 +84,7 @@ mod tests {
         assert!(source.contains("DragDropEvent::Drop"));
         assert!(source.contains("on_webview_event"));
         assert!(source.contains("authorized-file-drop"));
+        assert!(source.contains("emit_to"));
 
         let capabilities: Value = serde_json::from_str(include_str!(
             "../capabilities/default.json"

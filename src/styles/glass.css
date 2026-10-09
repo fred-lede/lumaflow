@@ -55,7 +55,7 @@ main:focus-visible {
 }
 
 .workspace-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .workspace-topbar {
@@ -132,7 +132,8 @@ p {
 .workspace-main {
   width: min(100% - 2rem, 76rem);
   margin: 0 auto;
-  padding: clamp(var(--space-8), 8vw, var(--space-12)) 0;
+  min-height: calc(100dvh - 4.75rem);
+  padding: clamp(var(--space-5), 4vh, var(--space-10)) 0;
 }
 
 .workspace-intro {
@@ -468,6 +469,35 @@ input::placeholder {
 
 .advanced-settings {
   padding-top: var(--space-1);
+}
+
+@media (min-width: 960px) {
+  .workspace-card--settings .output-settings {
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.8fr);
+    align-items: start;
+  }
+
+  .workspace-card--settings .output-settings > .field-row,
+  .workspace-card--settings .output-settings > .field-grid,
+  .workspace-card--settings .output-settings > .preset-fieldset,
+  .workspace-card--settings .output-settings > .inline-error {
+    grid-column: 1;
+  }
+
+  .workspace-card--settings .output-settings > .advanced-toggle {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .workspace-card--settings .output-settings > .advanced-settings {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    padding: var(--space-4);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-raised);
+  }
 }
 
 .inline-error {
