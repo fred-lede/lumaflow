@@ -524,6 +524,12 @@ input::placeholder {
   }
 }
 
+@media (min-width: 52rem) and (max-width: 84rem) {
+  .workspace-card--settings .advanced-settings .field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .inline-error {
   margin: 0;
   font-size: var(--font-size-supporting);
