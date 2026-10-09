@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import type { EnqueueJobRequest } from "../domain/job";
 import {
@@ -11,6 +11,8 @@ import {
   openOutputFolder,
   registerFileDropHandler,
   reorderJobs,
+  authorizeOutputPreview,
+  outputPreviewUrl,
   selectOutputFolder,
 } from "./tauri";
 
@@ -21,6 +23,7 @@ const { mockedGetCurrentWebview, mockedGetCurrentWindow } = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  convertFileSrc: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -32,10 +35,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 const mockedInvoke = vi.mocked(invoke);
+const mockedConvertFileSrc = vi.mocked(convertFileSrc);
 
 describe("typed Tauri wrappers", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
+    mockedConvertFileSrc.mockReset();
     mockedGetCurrentWebview.mockReset();
     mockedGetCurrentWindow.mockReset();
   });
@@ -97,6 +102,23 @@ describe("typed Tauri wrappers", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("analyze_files", {
       paths: ["/input/one.wav"],
     });
+  });
+
+  it("authorizes an output asset for preview", async () => {
+    mockedInvoke.mockResolvedValue("/output/clip.mp4");
+
+    await authorizeOutputPreview("/output/clip.mp4");
+
+    expect(mockedInvoke).toHaveBeenCalledWith("allow_output_preview", {
+      path: "/output/clip.mp4",
+    });
+  });
+
+  it("builds a preview URL through Tauri's asset helper", () => {
+    mockedConvertFileSrc.mockReturnValue("asset://localhost/output/clip.mp4");
+
+    expect(outputPreviewUrl("/output/clip.mp4")).toBe("asset://localhost/output/clip.mp4");
+    expect(mockedConvertFileSrc).toHaveBeenCalledWith("/output/clip.mp4");
   });
 
   it("uses backend-owned output folder selection and queue cleanup commands", async () => {

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -142,6 +142,14 @@ export function clearCompleted(): Promise<QueueSnapshot> {
 
 export function openOutputFolder(path: string): Promise<void> {
   return invokeLumaFlow<void>("open_output_folder", { path });
+}
+
+export function authorizeOutputPreview(path: string): Promise<string> {
+  return invokeLumaFlow<string>("allow_output_preview", { path });
+}
+
+export function outputPreviewUrl(path: string): string {
+  return convertFileSrc(path);
 }
 
 export type { JobEvent };
