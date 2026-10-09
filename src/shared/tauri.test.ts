@@ -9,12 +9,21 @@ import {
   clearCompleted,
   enqueueJobs,
   openOutputFolder,
+  registerFileDropHandler,
   reorderJobs,
   selectOutputFolder,
 } from "./tauri";
 
+const { mockedGetCurrentWebview } = vi.hoisted(() => ({
+  mockedGetCurrentWebview: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: mockedGetCurrentWebview,
 }));
 
 const mockedInvoke = vi.mocked(invoke);
@@ -22,6 +31,28 @@ const mockedInvoke = vi.mocked(invoke);
 describe("typed Tauri wrappers", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
+    mockedGetCurrentWebview.mockReset();
+  });
+
+  it("consumes backend-authorized paths from the native drop event", async () => {
+    let dropHandler: ((event: { payload: { type: string } }) => void | Promise<void>) | undefined;
+    const unlisten = vi.fn();
+    const onDragDropEvent = vi.fn(async (handler: typeof dropHandler) => {
+      dropHandler = handler;
+      return unlisten;
+    });
+    mockedGetCurrentWebview.mockReturnValue({ onDragDropEvent });
+    mockedInvoke.mockResolvedValue(["/media/clip.mp4"]);
+    const handler = vi.fn();
+
+    const cleanup = await registerFileDropHandler(handler);
+    await dropHandler?.({ payload: { type: "drop" } });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("consume_dropped_paths");
+    expect(handler).toHaveBeenCalledWith(["/media/clip.mp4"]);
+
+    cleanup();
+    expect(unlisten).toHaveBeenCalledOnce();
   });
 
   it("passes typed file paths to analyze_files", async () => {

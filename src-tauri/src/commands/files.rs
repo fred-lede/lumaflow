@@ -100,6 +100,11 @@ pub fn analyze_files(
 }
 
 #[tauri::command]
+pub fn consume_dropped_paths(state: State<'_, BackendState>) -> Vec<String> {
+    state.consume_trusted_dropped_paths()
+}
+
+#[tauri::command]
 pub fn open_output_folder(
     state: State<'_, BackendState>,
     path: String,

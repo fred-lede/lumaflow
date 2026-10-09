@@ -24,6 +24,7 @@ type ProbeService = Arc<dyn Fn(&Path) -> Result<MediaInfo, MediaError> + Send + 
 pub struct BackendState {
     pub(crate) scheduler: Scheduler,
     pub(crate) selected_paths: Mutex<HashSet<PathBuf>>,
+    pub(crate) pending_dropped_paths: Mutex<Vec<PathBuf>>,
     pub(crate) selected_output_directories: Mutex<HashSet<PathBuf>>,
     pub(crate) authorized_output_paths: Mutex<HashMap<String, PathBuf>>,
     pub(crate) command_lock: Mutex<()>,
@@ -45,6 +46,7 @@ impl BackendState {
         Self {
             scheduler: Scheduler::with_default_concurrency(Arc::new(FfmpegRunner::with_tools(tools.clone()))),
             selected_paths: Mutex::new(HashSet::new()),
+            pending_dropped_paths: Mutex::new(Vec::new()),
             selected_output_directories: Mutex::new(HashSet::new()),
             authorized_output_paths: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
@@ -60,6 +62,7 @@ impl BackendState {
         Self {
             scheduler: Scheduler::with_default_concurrency(Arc::new(FfmpegRunner::system())),
             selected_paths: Mutex::new(HashSet::new()),
+            pending_dropped_paths: Mutex::new(Vec::new()),
             selected_output_directories: Mutex::new(HashSet::new()),
             authorized_output_paths: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
@@ -73,6 +76,7 @@ impl BackendState {
         Self {
             scheduler,
             selected_paths: Mutex::new(HashSet::new()),
+            pending_dropped_paths: Mutex::new(Vec::new()),
             selected_output_directories: Mutex::new(HashSet::new()),
             authorized_output_paths: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
@@ -93,13 +97,31 @@ impl BackendState {
     }
 
     pub(crate) fn register_trusted_dropped_paths(&self, paths: &[PathBuf]) -> Vec<String> {
-        paths
+        let normalized_paths = paths
             .iter()
             .filter_map(|path| normalize_selected_path(&path.to_string_lossy()).ok())
-            .map(|path| {
-                self.remember_selected_path(path.clone());
-                path.to_string_lossy().into_owned()
-            })
+            .collect::<Vec<_>>();
+
+        for path in &normalized_paths {
+            self.remember_selected_path(path.clone());
+        }
+        self.pending_dropped_paths
+            .lock()
+            .expect("pending dropped path lock should succeed")
+            .extend(normalized_paths.iter().cloned());
+
+        normalized_paths
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    pub(crate) fn consume_trusted_dropped_paths(&self) -> Vec<String> {
+        self.pending_dropped_paths
+            .lock()
+            .expect("pending dropped path lock should succeed")
+            .drain(..)
+            .map(|path| path.to_string_lossy().into_owned())
             .collect()
     }
 
@@ -694,6 +716,24 @@ mod tests {
             .probe_selected_path(&source.to_string_lossy())
             .expect("trusted dropped source should be analyzable");
         assert_eq!(analyzed.file_name, "clip.wav");
+        let _ = fs::remove_dir_all(source.parent().expect("source should have a parent"));
+    }
+
+    #[test]
+    fn trusted_dropped_paths_can_be_consumed_by_the_renderer() {
+        let source = temporary_file();
+        let state = BackendState::new();
+
+        state.register_trusted_dropped_paths(std::slice::from_ref(&source));
+
+        assert_eq!(
+            state.consume_trusted_dropped_paths(),
+            vec![fs::canonicalize(&source)
+                .expect("source should canonicalize")
+                .to_string_lossy()
+                .into_owned()]
+        );
+        assert!(state.consume_trusted_dropped_paths().is_empty());
         let _ = fs::remove_dir_all(source.parent().expect("source should have a parent"));
     }
 
