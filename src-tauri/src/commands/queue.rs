@@ -116,13 +116,25 @@ impl BackendState {
             .collect()
     }
 
-    pub(crate) fn consume_trusted_dropped_paths(&self) -> Vec<String> {
-        self.pending_dropped_paths
+    pub(crate) fn consume_trusted_dropped_paths(&self, requested_paths: &[String]) -> Vec<String> {
+        let requested = requested_paths
+            .iter()
+            .filter_map(|path| normalize_selected_path(path).ok())
+            .collect::<HashSet<_>>();
+        let mut pending = self
+            .pending_dropped_paths
             .lock()
-            .expect("pending dropped path lock should succeed")
-            .drain(..)
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect()
+            .expect("pending dropped path lock should succeed");
+        let mut consumed = Vec::new();
+        pending.retain(|path| {
+            if requested.contains(path) {
+                consumed.push(path.to_string_lossy().into_owned());
+                false
+            } else {
+                true
+            }
+        });
+        consumed
     }
 
     pub(crate) fn require_selected_path(&self, raw_path: &str) -> Result<PathBuf, CommandError> {
@@ -727,13 +739,15 @@ mod tests {
         state.register_trusted_dropped_paths(std::slice::from_ref(&source));
 
         assert_eq!(
-            state.consume_trusted_dropped_paths(),
+            state.consume_trusted_dropped_paths(&[source.to_string_lossy().into_owned()]),
             vec![fs::canonicalize(&source)
                 .expect("source should canonicalize")
                 .to_string_lossy()
                 .into_owned()]
         );
-        assert!(state.consume_trusted_dropped_paths().is_empty());
+        assert!(state
+            .consume_trusted_dropped_paths(&[source.to_string_lossy().into_owned()])
+            .is_empty());
         let _ = fs::remove_dir_all(source.parent().expect("source should have a parent"));
     }
 

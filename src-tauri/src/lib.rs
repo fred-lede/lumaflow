@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tauri::{DragDropEvent, Emitter, Manager, WebviewEvent};
+use tauri::{DragDropEvent, Emitter, Manager, WebviewEvent, WindowEvent};
 
 pub mod commands;
 pub mod domain;
@@ -30,6 +30,12 @@ pub fn run() {
         .on_webview_event(|webview, event| {
             if let WebviewEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
                 let state = webview.state::<commands::queue::BackendState>();
+                state.register_trusted_dropped_paths(paths);
+            }
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+                let state = window.state::<commands::queue::BackendState>();
                 state.register_trusted_dropped_paths(paths);
             }
         })
@@ -76,6 +82,8 @@ mod tests {
         }
         assert!(source.contains("DragDropEvent::Drop"));
         assert!(source.contains("on_webview_event"));
+        assert!(source.contains("on_window_event"));
+        assert!(source.contains("WindowEvent::DragDrop"));
         assert!(source.contains("register_trusted_dropped_paths"));
 
         let capabilities: Value = serde_json::from_str(include_str!(

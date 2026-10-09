@@ -14,8 +14,9 @@ import {
   selectOutputFolder,
 } from "./tauri";
 
-const { mockedGetCurrentWebview } = vi.hoisted(() => ({
+const { mockedGetCurrentWebview, mockedGetCurrentWindow } = vi.hoisted(() => ({
   mockedGetCurrentWebview: vi.fn(),
+  mockedGetCurrentWindow: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -26,49 +27,61 @@ vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: mockedGetCurrentWebview,
 }));
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: mockedGetCurrentWindow,
+}));
+
 const mockedInvoke = vi.mocked(invoke);
 
 describe("typed Tauri wrappers", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
     mockedGetCurrentWebview.mockReset();
+    mockedGetCurrentWindow.mockReset();
   });
 
   it("consumes backend-authorized paths from the native drop event", async () => {
-    let dropHandler: ((event: { payload: { type: string } }) => void | Promise<void>) | undefined;
-    const unlisten = vi.fn();
+    let dropHandler: ((event: { payload: { type: string; paths?: string[] } }) => void | Promise<void>) | undefined;
+    const webviewUnlisten = vi.fn();
+    const windowUnlisten = vi.fn();
     const onDragDropEvent = vi.fn(async (handler: typeof dropHandler) => {
       dropHandler = handler;
-      return unlisten;
+      return onDragDropEvent.mock.calls.length === 1 ? webviewUnlisten : windowUnlisten;
     });
     mockedGetCurrentWebview.mockReturnValue({ onDragDropEvent });
+    mockedGetCurrentWindow.mockReturnValue({ onDragDropEvent });
     mockedInvoke.mockResolvedValue(["/media/clip.mp4"]);
     const handler = vi.fn();
 
     const cleanup = await registerFileDropHandler(handler);
-    await dropHandler?.({ payload: { type: "drop" } });
+    await dropHandler?.({ payload: { type: "drop", paths: ["/media/clip.mp4"] } });
 
-    expect(mockedInvoke).toHaveBeenCalledWith("consume_dropped_paths");
+    expect(onDragDropEvent).toHaveBeenCalledTimes(2);
+    expect(mockedInvoke).toHaveBeenCalledWith("consume_dropped_paths", {
+      paths: ["/media/clip.mp4"],
+    });
     expect(handler).toHaveBeenCalledWith(["/media/clip.mp4"]);
 
     cleanup();
-    expect(unlisten).toHaveBeenCalledOnce();
+    expect(webviewUnlisten).toHaveBeenCalledOnce();
+    expect(windowUnlisten).toHaveBeenCalledOnce();
   });
 
   it("retries once when the native event arrives before Rust queues its paths", async () => {
-    let dropHandler: ((event: { payload: { type: string } }) => void | Promise<void>) | undefined;
+    let dropHandler: ((event: { payload: { type: string; paths?: string[] } }) => void | Promise<void>) | undefined;
     const onDragDropEvent = vi.fn(async (handler: typeof dropHandler) => {
       dropHandler = handler;
       return vi.fn();
     });
     mockedGetCurrentWebview.mockReturnValue({ onDragDropEvent });
+    mockedGetCurrentWindow.mockReturnValue({ onDragDropEvent });
     mockedInvoke
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce(["/media/queued-after-event.mp4"]);
     const handler = vi.fn();
 
     await registerFileDropHandler(handler).then(async (cleanup) => {
-      await dropHandler?.({ payload: { type: "drop" } });
+      await dropHandler?.({ payload: { type: "drop", paths: ["/media/queued-after-event.mp4"] } });
       cleanup();
     });
 

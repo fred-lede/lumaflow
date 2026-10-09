@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import type { MediaInfo } from "../domain/media";
@@ -61,31 +62,42 @@ export function selectFiles(): Promise<string[]> {
   return invokeLumaFlow<string[]>("select_files");
 }
 
-export function consumeDroppedPaths(): Promise<string[]> {
-  return invokeLumaFlow<string[]>("consume_dropped_paths");
+export function consumeDroppedPaths(paths: string[]): Promise<string[]> {
+  return invokeLumaFlow<string[]>("consume_dropped_paths", { paths });
 }
 
-async function consumeDroppedPathsAfterNativeEvent(): Promise<string[]> {
-  const firstAttempt = await consumeDroppedPaths();
+async function consumeDroppedPathsAfterNativeEvent(nativePaths: string[]): Promise<string[]> {
+  const firstAttempt = await consumeDroppedPaths(nativePaths);
   if (firstAttempt.length > 0) {
     return firstAttempt;
   }
 
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  return consumeDroppedPaths();
+  return consumeDroppedPaths(nativePaths);
 }
+
+type NativeDragDropEvent = Parameters<
+  Parameters<ReturnType<typeof getCurrentWebview>["onDragDropEvent"]>[0]
+>[0];
 
 export function registerFileDropHandler(handler: (paths: string[]) => void): Promise<UnlistenFn> {
   try {
-    return getCurrentWebview().onDragDropEvent(async (event) => {
+    const handleDropEvent = async (event: NativeDragDropEvent) => {
       if (event.payload.type !== "drop") {
         return;
       }
 
-      const paths = await consumeDroppedPathsAfterNativeEvent();
+      const paths = await consumeDroppedPathsAfterNativeEvent(event.payload.paths);
       if (paths.length > 0) {
         handler(paths);
       }
+    };
+    return Promise.all([
+      getCurrentWebview().onDragDropEvent(handleDropEvent),
+      getCurrentWindow().onDragDropEvent(handleDropEvent),
+    ]).then(([unlistenWebview, unlistenWindow]) => () => {
+      unlistenWebview();
+      unlistenWindow();
     });
   } catch (error) {
     return Promise.reject(LumaFlowError.from(error));
