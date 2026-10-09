@@ -54,15 +54,17 @@ describe("useAudioPreview", () => {
   });
 
   it("authorizes and plays an mp3 through the preview URL", async () => {
-    const { result, adapter, audio } = renderPreview();
+    const { result, adapter, audio } = renderPreview({
+      authorizeOutputPreview: vi.fn(async () => "/authorized/clip.mp3"),
+    });
 
     await act(async () => {
       await result.current.play("/output/clip.mp3");
     });
 
     expect(adapter.authorizeOutputPreview).toHaveBeenCalledWith("/output/clip.mp3");
-    expect(adapter.outputPreviewUrl).toHaveBeenCalledWith("/output/clip.mp3");
-    expect(audio.src).toBe("preview:///output/clip.mp3");
+    expect(adapter.outputPreviewUrl).toHaveBeenCalledWith("/authorized/clip.mp3");
+    expect(audio.src).toBe("preview:///authorized/clip.mp3");
     expect(audio.load).toHaveBeenCalledTimes(2);
     expect(audio.play).toHaveBeenCalledOnce();
     expect(result.current.activePath).toBe("/output/clip.mp3");
@@ -106,7 +108,7 @@ describe("useAudioPreview", () => {
     });
 
     expect(audio.pause).toHaveBeenCalledTimes(2);
-    expect(audio.src).toBe("preview:///output/second.mp4");
+    expect(audio.src).toBe("preview:///authorized/output.mp4");
     expect(result.current.activePath).toBe("/output/second.mp4");
   });
 
@@ -201,7 +203,36 @@ describe("useAudioPreview", () => {
       await firstPlay;
     });
 
-    expect(audio.src).toBe("preview:///output/second.mp4");
+    expect(audio.src).toBe("preview:///authorized/second.mp4");
     expect(result.current.activePath).toBe("/output/second.mp4");
+  });
+
+  it("invalidates pending playback on unmount and resets audio without state updates", async () => {
+    let resolveAuthorization: ((path: string) => void) | undefined;
+    const authorizeOutputPreview = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveAuthorization = resolve;
+        }),
+    );
+    const { result, adapter, audio, unmount } = renderPreview({ authorizeOutputPreview });
+
+    let playPromise: Promise<void> | undefined;
+    await act(async () => {
+      playPromise = result.current.play("/output/clip.mp4");
+      await Promise.resolve();
+    });
+
+    unmount();
+    resolveAuthorization?.("/authorized/clip.mp4");
+    await act(async () => {
+      await playPromise;
+    });
+
+    expect(audio.pause).toHaveBeenCalledTimes(2);
+    expect(audio.currentTime).toBe(0);
+    expect(audio.src).toBe("");
+    expect(adapter.outputPreviewUrl).not.toHaveBeenCalled();
+    expect(audio.play).not.toHaveBeenCalled();
   });
 });

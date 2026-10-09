@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
 
 import { authorizeOutputPreview, outputPreviewUrl } from "../../shared/tauri";
@@ -39,7 +39,7 @@ export function useAudioPreview(
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const resetAudio = useCallback((): void => {
+  const resetAudio = useCallback((updateState = true): void => {
     const audio = audioRef.current;
     if (audio) {
       audio.pause();
@@ -48,9 +48,18 @@ export function useAudioPreview(
       audio.load();
     }
     activePathRef.current = null;
-    setActivePath(null);
-    setError(null);
+    if (updateState) {
+      setActivePath(null);
+      setError(null);
+    }
   }, []);
+
+  useEffect(() => {
+    return () => {
+      operationRef.current += 1;
+      resetAudio(false);
+    };
+  }, [resetAudio]);
 
   const stop = useCallback((): void => {
     operationRef.current += 1;
@@ -68,7 +77,7 @@ export function useAudioPreview(
       }
 
       try {
-        await adapter.authorizeOutputPreview(path);
+        const authorizedPath = await adapter.authorizeOutputPreview(path);
         if (operationRef.current !== operation) {
           return;
         }
@@ -78,7 +87,7 @@ export function useAudioPreview(
           throw new Error("Audio preview element is unavailable");
         }
 
-        audio.src = adapter.outputPreviewUrl(path);
+        audio.src = adapter.outputPreviewUrl(authorizedPath);
         audio.load();
         await audio.play();
         if (operationRef.current !== operation) {
