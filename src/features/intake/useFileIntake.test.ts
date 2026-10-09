@@ -19,6 +19,11 @@ function mediaFor(path: string): MediaInfo {
     container: path.endsWith(".mp3") ? "mp3" : "mov",
     durationSeconds: 12.5,
     sizeBytes: 1_024,
+    sourceQuality: {
+      status: "unknown",
+      summary: "Source quality could not be verified",
+      evidence: ["A lossless container does not prove that the original source was lossless"],
+    },
     videoStreams: [],
     audioStreams: [{ codec: "aac", streamIndex: 0, sampleRateHz: 48_000, channels: 2 }],
     subtitleStreams: [],

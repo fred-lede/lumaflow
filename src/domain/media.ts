@@ -16,12 +16,25 @@ export type AudioStreamInfo = MediaStreamInfo & {
 
 export type SubtitleStreamInfo = MediaStreamInfo;
 
+export type SourceQualityStatus =
+  | "lossySource"
+  | "likelyNativeLossless"
+  | "possiblyTranscodedLossy"
+  | "unknown";
+
+export type SourceQualityAssessment = {
+  status: SourceQualityStatus;
+  summary: string;
+  evidence: string[];
+};
+
 export type MediaInfo = {
   path: string;
   fileName: string;
   container: string;
   durationSeconds: number;
   sizeBytes: number;
+  sourceQuality: SourceQualityAssessment;
   videoStreams: VideoStreamInfo[];
   audioStreams: AudioStreamInfo[];
   subtitleStreams: SubtitleStreamInfo[];

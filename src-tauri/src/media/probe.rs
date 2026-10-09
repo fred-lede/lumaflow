@@ -2,7 +2,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::domain::media::{AudioStreamInfo, MediaInfo, SubtitleStreamInfo, VideoStreamInfo};
+use crate::domain::media::{
+    AudioStreamInfo, MediaInfo, SourceQualityAssessment, SourceQualityStatus, SubtitleStreamInfo,
+    VideoStreamInfo,
+};
 
 use super::MediaError;
 use super::tools::ToolLocator;
@@ -155,6 +158,7 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaError::new("probe_invalid_path", "Media path has no valid file name"))?;
+    let source_quality = assess_source_quality(runner, &document, &audio_streams, &path_string);
 
     Ok(MediaInfo {
         path: path_string,
@@ -162,10 +166,150 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
         container,
         duration_seconds,
         size_bytes,
+        source_quality,
         video_streams,
         audio_streams,
         subtitle_streams,
     })
+}
+
+fn assess_source_quality<R: CommandRunner>(
+    runner: &R,
+    document: &Value,
+    audio_streams: &[AudioStreamInfo],
+    path: &str,
+) -> SourceQualityAssessment {
+    if audio_streams.is_empty() {
+        return SourceQualityAssessment::unknown();
+    }
+
+    if let Some(codec) = audio_streams.iter().map(|stream| stream.codec.as_str()).find(|codec| {
+        is_lossy_codec(codec)
+    }) {
+        return SourceQualityAssessment {
+            status: SourceQualityStatus::LossySource,
+            summary: "Source uses a lossy audio codec".to_owned(),
+            evidence: vec![format!("Audio codec: {codec}")],
+        };
+    }
+
+    let suspicious_tags = suspicious_encoder_tags(document);
+    if !suspicious_tags.is_empty() {
+        return SourceQualityAssessment {
+            status: SourceQualityStatus::PossiblyTranscodedLossy,
+            summary: "Possibly transcoded from a lossy source".to_owned(),
+            evidence: suspicious_tags,
+        };
+    }
+
+    let first_audio = &audio_streams[0];
+    let Some(rolloff_hz) = spectral_rolloff_hz(runner, path) else {
+        return SourceQualityAssessment::unknown();
+    };
+    let nyquist_hz = f64::from(first_audio.sample_rate_hz) / 2.0;
+    if rolloff_hz < nyquist_hz * 0.45 {
+        return SourceQualityAssessment {
+            status: SourceQualityStatus::PossiblyTranscodedLossy,
+            summary: "Possibly transcoded from a lossy source".to_owned(),
+            evidence: vec![format!(
+                "The sampled spectral rolloff is unusually low at approximately {rolloff_hz:.0} Hz"
+            )],
+        };
+    }
+    if rolloff_hz >= nyquist_hz * 0.72 {
+        return SourceQualityAssessment {
+            status: SourceQualityStatus::LikelyNativeLossless,
+            summary: "Likely native lossless source".to_owned(),
+            evidence: vec![format!(
+                "The sampled spectrum contains broad-band energy up to approximately {rolloff_hz:.0} Hz"
+            )],
+        };
+    }
+
+    SourceQualityAssessment::unknown()
+}
+
+fn is_lossy_codec(codec: &str) -> bool {
+    matches!(
+        codec.to_ascii_lowercase().as_str(),
+        "mp3"
+            | "aac"
+            | "ac3"
+            | "eac3"
+            | "vorbis"
+            | "opus"
+            | "wmav2"
+            | "amr_nb"
+            | "amr_wb"
+            | "speex"
+            | "dts"
+    )
+}
+
+fn suspicious_encoder_tags(document: &Value) -> Vec<String> {
+    let mut evidence = Vec::new();
+    for section in [document.get("format"), document.get("streams")] {
+        let Some(section) = section else { continue };
+        let values = match section {
+            Value::Object(_) => vec![section],
+            Value::Array(streams) => streams.iter().collect(),
+            _ => Vec::new(),
+        };
+        for item in values {
+            let Some(tags) = item.get("tags").and_then(Value::as_object) else {
+                continue;
+            };
+            for (key, value) in tags {
+                let Some(value) = value.as_str() else { continue };
+                let normalized = value.to_ascii_lowercase();
+                if [
+                    "lame", "mp3", "libmp3lame", "aac", "faac", "fdk-aac", "vorbis", "opus",
+                ]
+                .iter()
+                .any(|marker| normalized.contains(marker))
+                {
+                    evidence.push(format!("Suspicious encoder metadata: {key}={value}"));
+                }
+            }
+        }
+    }
+    evidence
+}
+
+fn spectral_rolloff_hz<R: CommandRunner>(runner: &R, path: &str) -> Option<f64> {
+    let args = vec![
+        "-v".to_owned(),
+        "info".to_owned(),
+        "-nostats".to_owned(),
+        "-i".to_owned(),
+        path.to_owned(),
+        "-t".to_owned(),
+        "20".to_owned(),
+        "-map".to_owned(),
+        "0:a:0".to_owned(),
+        "-vn".to_owned(),
+        "-af".to_owned(),
+        "aspectralstats=win_size=4096:measure=rolloff,ametadata=mode=print:file=-".to_owned(),
+        "-f".to_owned(),
+        "null".to_owned(),
+        "-".to_owned(),
+    ];
+    let output = runner.run("ffmpeg", &args).ok()?;
+    if output.status != 0 {
+        return None;
+    }
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    let mut values = combined
+        .lines()
+        .filter_map(|line| line.split_once("lavfi.aspectralstats.1.rolloff="))
+        .filter_map(|(_, value)| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .collect::<Vec<_>>();
+    if values.len() < 4 {
+        return None;
+    }
+    values.sort_by(|left, right| left.total_cmp(right));
+    Some(values[values.len() / 2])
 }
 
 fn required_object<'a>(document: &'a Value, field: &str) -> Result<&'a Value, MediaError> {
@@ -298,7 +442,9 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::domain::media::{AudioStreamInfo, MediaInfo, SubtitleStreamInfo, VideoStreamInfo};
+    use crate::domain::media::{
+        AudioStreamInfo, MediaInfo, SourceQualityStatus, SubtitleStreamInfo, VideoStreamInfo,
+    };
 
     const MP4_JSON: &str = r#"
     {
@@ -349,6 +495,20 @@ mod tests {
     }
     "#;
 
+    const LOSSLESS_WITH_SUSPICIOUS_TAG_JSON: &str = r#"
+    {
+      "format": {
+        "format_name":"flac",
+        "duration":"5.0",
+        "size":"16384",
+        "tags":{"encoder":"LAME MP3 encoder"}
+      },
+      "streams": [
+        {"index":0,"codec_type":"audio","codec_name":"flac","sample_rate":"44100","channels":2}
+      ]
+    }
+    "#;
+
     const MULTI_AUDIO_MP4_JSON: &str = r#"
     {
       "format": {"format_name":"mp4","duration":"20.0","size":"65536"},
@@ -375,6 +535,15 @@ mod tests {
                 stdout: stdout.to_owned(),
                 status: 0,
                 stderr: String::new(),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn successful_with_stderr(stdout: &str, stderr: &str) -> Self {
+            Self {
+                stdout: stdout.to_owned(),
+                status: 0,
+                stderr: stderr.to_owned(),
                 calls: RefCell::new(Vec::new()),
             }
         }
@@ -407,6 +576,11 @@ mod tests {
                 container: "mp4".to_owned(),
                 duration_seconds: 12.5,
                 size_bytes: 4096,
+                source_quality: crate::domain::media::SourceQualityAssessment {
+                    status: SourceQualityStatus::LossySource,
+                    summary: "Source uses a lossy audio codec".to_owned(),
+                    evidence: vec!["Audio codec: aac".to_owned()],
+                },
                 video_streams: vec![VideoStreamInfo {
                     codec: "h264".to_owned(),
                     stream_index: 0,
@@ -590,6 +764,38 @@ mod tests {
         assert_eq!(wav.audio_streams[0].sample_rate_hz, 44_100);
         assert_eq!(flac.container, "flac");
         assert_eq!(flac.audio_streams[0].codec, "flac");
+        assert_eq!(wav.source_quality.status, SourceQualityStatus::Unknown);
+        assert_eq!(flac.source_quality.status, SourceQualityStatus::Unknown);
+    }
+
+    #[test]
+    fn reports_suspicious_lossy_encoder_metadata_for_a_lossless_container() {
+        let actual = probe_media(
+            &FakeRunner::successful(LOSSLESS_WITH_SUSPICIOUS_TAG_JSON),
+            "/input/voice.flac",
+        )
+        .expect("FLAC with encoder metadata should probe");
+
+        assert_eq!(
+            actual.source_quality.status,
+            SourceQualityStatus::PossiblyTranscodedLossy
+        );
+        assert!(actual.source_quality.evidence.iter().any(|evidence| evidence.contains("LAME")));
+    }
+
+    #[test]
+    fn reports_likely_native_lossless_when_spectral_rolloff_is_wide() {
+        let spectral_output = (0..6)
+            .map(|frame| format!("frame:{frame}\n lavfi.aspectralstats.1.rolloff=40000"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let actual = probe_media(
+            &FakeRunner::successful_with_stderr(FLAC_JSON, &spectral_output),
+            "/input/voice.flac",
+        )
+        .expect("FLAC with spectral evidence should probe");
+
+        assert_eq!(actual.source_quality.status, SourceQualityStatus::LikelyNativeLossless);
     }
 
     #[test]

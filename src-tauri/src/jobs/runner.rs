@@ -459,6 +459,7 @@ mod tests {
                     container: "wav".to_owned(),
                     duration_seconds: 2.0,
                     size_bytes: 6,
+                    source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
                     video_streams: vec![],
                     audio_streams: vec![],
                     subtitle_streams: vec![],

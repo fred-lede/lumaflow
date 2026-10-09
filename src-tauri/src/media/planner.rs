@@ -29,6 +29,7 @@ mod tests {
             container: "mp4".to_owned(),
             duration_seconds: 12.5,
             size_bytes: 4096,
+            source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
             video_streams: vec![VideoStreamInfo {
                 codec: "h264".to_owned(),
                 stream_index: 0,
@@ -64,6 +65,7 @@ mod tests {
             container: "wav".to_owned(),
             duration_seconds: 3.25,
             size_bytes: 8192,
+            source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
             video_streams: vec![],
             audio_streams: vec![AudioStreamInfo {
                 codec: "pcm_s16le".to_owned(),
@@ -82,6 +84,7 @@ mod tests {
             container: "mp3".to_owned(),
             duration_seconds: 3.25,
             size_bytes: 8192,
+            source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
             video_streams: vec![],
             audio_streams: vec![AudioStreamInfo {
                 codec: "mp3".to_owned(),

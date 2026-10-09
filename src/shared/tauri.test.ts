@@ -194,6 +194,11 @@ describe("typed Tauri wrappers", () => {
         container: "wav",
         durationSeconds: 1,
         sizeBytes: 128,
+        sourceQuality: {
+          status: "unknown",
+          summary: "Source quality could not be verified",
+          evidence: ["A lossless container does not prove that the original source was lossless"],
+        },
         videoStreams: [],
         audioStreams: [],
         subtitleStreams: [],

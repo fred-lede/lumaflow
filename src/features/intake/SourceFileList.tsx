@@ -1,6 +1,7 @@
 import type { FC } from "react";
 
 import type { SourceFile } from "./useFileIntake";
+import type { SourceQualityStatus } from "../../domain/media";
 
 export type SourceFileListProps = {
   sources: SourceFile[];
@@ -24,6 +25,19 @@ function formatBytes(bytes: number): string {
 export function fileNameForPath(path: string): string {
   const segments = path.replaceAll("\\", "/").split("/");
   return segments.at(-1) || "Unnamed file";
+}
+
+function sourceQualityLabel(status: SourceQualityStatus): string {
+  switch (status) {
+    case "lossySource":
+      return "Lossy source";
+    case "likelyNativeLossless":
+      return "Likely native lossless";
+    case "possiblyTranscodedLossy":
+      return "Possibly transcoded";
+    case "unknown":
+      return "Source quality unverified";
+  }
 }
 
 export const SourceFileList: FC<SourceFileListProps> = ({ sources, onRemove }) => {
@@ -51,9 +65,33 @@ export const SourceFileList: FC<SourceFileListProps> = ({ sources, onRemove }) =
                 {source.error}
               </span>
             ) : (
-              <span className="source-list__meta">
-                {source.media?.container.toUpperCase()} · {formatDuration(source.media?.durationSeconds ?? 0)} · {formatBytes(source.media?.sizeBytes ?? 0)}
-              </span>
+              <>
+                <span className="source-list__meta">
+                  {source.media?.container.toUpperCase()} · {formatDuration(source.media?.durationSeconds ?? 0)} · {formatBytes(source.media?.sizeBytes ?? 0)}
+                </span>
+                {source.media?.sourceQuality ? (
+                  <div
+                    className={`source-quality source-quality--${source.media.sourceQuality.status}`}
+                    role="note"
+                    aria-label={`Source quality: ${source.media.sourceQuality.summary}`}
+                  >
+                    <span className="source-quality__label">
+                      {sourceQualityLabel(source.media.sourceQuality.status)}
+                    </span>
+                    <span className="source-quality__summary">{source.media.sourceQuality.summary}</span>
+                    {source.media.sourceQuality.evidence.length > 0 ? (
+                      <details className="source-quality__details">
+                        <summary>Details</summary>
+                        <ul>
+                          {source.media.sourceQuality.evidence.map((evidence) => (
+                            <li key={evidence}>{evidence}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
           <button

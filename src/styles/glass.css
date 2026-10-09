@@ -368,6 +368,47 @@ select {
   color: var(--color-danger);
 }
 
+.source-quality {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-accent-soft);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-supporting);
+  line-height: 1.45;
+}
+
+.source-quality--lossySource,
+.source-quality--possiblyTranscodedLossy {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.source-quality--likelyNativeLossless {
+  border-left-color: var(--color-success);
+  background: var(--color-success-soft);
+}
+
+.source-quality__label {
+  color: var(--color-text);
+  font-weight: var(--font-weight-bold);
+}
+
+.source-quality__details summary {
+  width: fit-content;
+  color: var(--color-text);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
+}
+
+.source-quality__details ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+}
+
 .audio-preview {
   position: absolute;
   width: 1px;

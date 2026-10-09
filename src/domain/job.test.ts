@@ -41,6 +41,11 @@ describe("JobState", () => {
       container: "matroska",
       durationSeconds: 30,
       sizeBytes: 4_096,
+      sourceQuality: {
+        status: "unknown",
+        summary: "Source quality could not be verified",
+        evidence: ["A lossless container does not prove that the original source was lossless"],
+      },
       videoStreams: [
         {
           codec: "h264",
@@ -84,6 +89,11 @@ describe("JobState", () => {
         container: "matroska",
         durationSeconds: 30,
         sizeBytes: 4_096,
+        sourceQuality: {
+          status: "unknown",
+          summary: "Source quality could not be verified",
+          evidence: ["A lossless container does not prove that the original source was lossless"],
+        },
         videoStreams: [],
         audioStreams: [],
         subtitleStreams: [],

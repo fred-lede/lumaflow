@@ -27,9 +27,39 @@ pub struct MediaInfo {
     pub container: String,
     pub duration_seconds: f64,
     pub size_bytes: u64,
+    pub source_quality: SourceQualityAssessment,
     pub video_streams: Vec<VideoStreamInfo>,
     pub audio_streams: Vec<AudioStreamInfo>,
     pub subtitle_streams: Vec<SubtitleStreamInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceQualityStatus {
+    LossySource,
+    LikelyNativeLossless,
+    PossiblyTranscodedLossy,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceQualityAssessment {
+    pub status: SourceQualityStatus,
+    pub summary: String,
+    pub evidence: Vec<String>,
+}
+
+impl SourceQualityAssessment {
+    pub fn unknown() -> Self {
+        Self {
+            status: SourceQualityStatus::Unknown,
+            summary: "Source quality could not be verified".to_owned(),
+            evidence: vec![
+                "A lossless container does not prove that the original source was lossless".to_owned(),
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,7 +127,25 @@ pub enum QualityPreset {
 mod tests {
     use serde_json::json;
 
-    use super::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
+    use super::{MediaInfo, OutputFormat, OutputSettings, QualityPreset, SourceQualityAssessment, SourceQualityStatus};
+
+    #[test]
+    fn serializes_source_quality_assessment_with_explicit_uncertainty() {
+        let assessment = SourceQualityAssessment {
+            status: SourceQualityStatus::PossiblyTranscodedLossy,
+            summary: "Possibly transcoded from a lossy source".to_owned(),
+            evidence: vec!["The spectral profile shows a suspicious high-frequency cutoff".to_owned()],
+        };
+
+        assert_eq!(
+            serde_json::to_value(assessment).expect("source quality should serialize"),
+            json!({
+                "status": "possiblyTranscodedLossy",
+                "summary": "Possibly transcoded from a lossy source",
+                "evidence": ["The spectral profile shows a suspicious high-frequency cutoff"]
+            })
+        );
+    }
 
     #[test]
     fn serializes_closed_output_settings_literals() {
@@ -200,6 +248,7 @@ mod tests {
             container: "matroska".to_owned(),
             duration_seconds: 30.0,
             size_bytes: 4_096,
+            source_quality: SourceQualityAssessment::unknown(),
             video_streams: vec![],
             audio_streams: vec![],
             subtitle_streams: vec![super::SubtitleStreamInfo {

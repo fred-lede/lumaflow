@@ -51,6 +51,11 @@ function job(
       container: "mov",
       durationSeconds: 12,
       sizeBytes: 1024,
+      sourceQuality: {
+        status: "unknown",
+        summary: "Source quality could not be verified",
+        evidence: ["A lossless container does not prove that the original source was lossless"],
+      },
       videoStreams: [],
       audioStreams: [],
       subtitleStreams: [],

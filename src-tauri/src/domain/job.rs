@@ -115,6 +115,7 @@ mod tests {
             container: "wav".to_owned(),
             duration_seconds: 12.5,
             size_bytes: 1_024,
+            source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
             video_streams: vec![],
             audio_streams: vec![AudioStreamInfo {
                 codec: "pcm_s16le".to_owned(),
@@ -179,6 +180,11 @@ mod tests {
                     "container": "wav",
                     "durationSeconds": 12.5,
                     "sizeBytes": 1024,
+                    "sourceQuality": {
+                        "status": "unknown",
+                        "summary": "Source quality could not be verified",
+                        "evidence": ["A lossless container does not prove that the original source was lossless"]
+                    },
                     "videoStreams": [],
                     "audioStreams": [{
                         "codec": "pcm_s16le",

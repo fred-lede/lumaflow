@@ -354,6 +354,7 @@ mod tests {
                 container: "wav".to_owned(),
                 duration_seconds: 1.0,
                 size_bytes: 1,
+                source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
                 video_streams: vec![],
                 audio_streams: vec![AudioStreamInfo {
                     codec: "pcm_s16le".to_owned(),
@@ -389,6 +390,7 @@ mod tests {
                         container: "wav".to_owned(),
                         duration_seconds: 1.0,
                         size_bytes: 1,
+                        source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
                         video_streams: vec![],
                         audio_streams: vec![],
                         subtitle_streams: vec![],
@@ -511,6 +513,7 @@ mod tests {
                         container: "wav".to_owned(),
                         duration_seconds: 1.0,
                         size_bytes: 1,
+                        source_quality: crate::domain::media::SourceQualityAssessment::unknown(),
                         video_streams: vec![],
                         audio_streams: vec![],
                         subtitle_streams: vec![],
