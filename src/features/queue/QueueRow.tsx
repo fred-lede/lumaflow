@@ -119,7 +119,7 @@ export const QueueRow: FC<QueueRowProps> = memo(({
               disabled={actionLocked}
               aria-label={previewLabel}
             >
-              {isPreviewActive ? "Stop preview" : "Play preview"}
+              {previewLabel}
             </button>
           ) : null}
           <button
