@@ -62,7 +62,8 @@ export const QueueRow: FC<QueueRowProps> = memo(({
   const percentage = progressPercent(job);
   const canOpen = canOpenOutput(job.state.kind) && job.outputPath !== null;
   const previewPath = job.outputPath;
-  const previewLabel = `${isPreviewActive ? "Stop" : "Play"} preview for ${fileNameForJob(job)}`;
+  const previewLabel = isPreviewActive ? "Stop preview" : "Play preview";
+  const previewDescriptionId = `queue-row-${job.id}-preview-file`;
   const actionLocked = mutationPending || pendingAction !== undefined;
   const canMoveUpForJob = canReorderJob(job.state.kind) && canMoveUp;
   const canMoveDownForJob = canReorderJob(job.state.kind) && canMoveDown;
@@ -112,15 +113,19 @@ export const QueueRow: FC<QueueRowProps> = memo(({
         <div className="queue-row__actions" role="group" aria-label={`${fileNameForJob(job)} actions`}>
           {previewError ? <p className="inline-error" role="alert">{previewError}</p> : null}
           {job.state.kind === "completed" && previewPath !== null ? (
-            <button
-              className="button button--secondary"
-              type="button"
-              onClick={() => onPreview(previewPath)}
-              disabled={actionLocked}
-              aria-label={previewLabel}
-            >
-              {previewLabel}
-            </button>
+            <>
+              <span id={previewDescriptionId} className="sr-only">{fileNameForJob(job)}</span>
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={() => onPreview(previewPath)}
+                disabled={actionLocked}
+                aria-label={previewLabel}
+                aria-describedby={previewDescriptionId}
+              >
+                {previewLabel}
+              </button>
+            </>
           ) : null}
           <button
             className="button button--secondary"

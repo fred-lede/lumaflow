@@ -550,8 +550,10 @@ describe("queue actions and accessible rendering", () => {
       onRetry: () => undefined,
     }));
 
-    expect(completedMarkup).toContain('aria-label="Play preview for completed.mov"');
-    expect(completedMarkup).toContain(">Play preview for completed.mov</button>");
+    expect(completedMarkup).toContain('aria-label="Play preview"');
+    expect(completedMarkup).toContain('aria-describedby="queue-row-completed-preview-file"');
+    expect(completedMarkup).toContain('id="queue-row-completed-preview-file"');
+    expect(completedMarkup).toContain(">Play preview</button>");
     expect(completedWithoutOutputMarkup).not.toContain("Play preview");
     expect(completedWithoutOutputMarkup).not.toContain("Stop preview");
     expect(queuedMarkup).not.toContain("Play preview");
@@ -572,8 +574,9 @@ describe("queue actions and accessible rendering", () => {
       onRetry: () => undefined,
     }));
 
-    expect(markup).toContain('aria-label="Stop preview for active.mov"');
-    expect(markup).toContain(">Stop preview for active.mov</button>");
+    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain('aria-describedby="queue-row-active-preview-file"');
+    expect(markup).toContain(">Stop preview</button>");
     expect(markup).not.toContain("Play preview");
   });
 
@@ -588,8 +591,9 @@ describe("queue actions and accessible rendering", () => {
 
     const markup = renderToStaticMarkup(createElement(QueuePanel, { controller }));
 
-    expect(markup).toContain('aria-label="Stop preview for active.mov"');
-    expect(markup).toContain(">Stop preview for active.mov</button>");
+    expect(markup).toContain('aria-label="Stop preview"');
+    expect(markup).toContain('aria-describedby="queue-row-active-preview-file"');
+    expect(markup).toContain(">Stop preview</button>");
     mockAudioPreview.activePath = null;
   });
 
@@ -605,7 +609,7 @@ describe("queue actions and accessible rendering", () => {
 
     render(createElement(QueuePanel, { controller }));
     await act(async () => {
-      screen.getByText("Play preview for pending.mov").click();
+      screen.getByRole("button", { name: "Play preview" }).click();
     });
     await act(async () => {
       await controller.clearCompleted();
@@ -624,7 +628,7 @@ describe("queue actions and accessible rendering", () => {
 
     render(createElement(QueuePanel, { controller }));
     await act(async () => {
-      screen.getByText("Play preview for errored.mov").click();
+      screen.getByRole("button", { name: "Play preview" }).click();
     });
     mockAudioPreview.error = previewError;
     act(() => controller.applySnapshot(snapshot([completed], 2)));
