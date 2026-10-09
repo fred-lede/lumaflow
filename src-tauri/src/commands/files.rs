@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -126,6 +127,10 @@ pub fn allow_output_preview(
     state: State<'_, BackendState>,
     path: String,
 ) -> Result<String, CommandError> {
+    let _command_lock = state
+        .command_lock
+        .lock()
+        .expect("command lock should succeed");
     let normalized = registered_output_file(&state, &path)?;
     app.asset_protocol_scope()
         .allow_file(&normalized)
@@ -147,13 +152,41 @@ fn registered_output_file(state: &BackendState, path: &str) -> Result<PathBuf, C
             "The output path was not created by a validated queue job",
         ));
     }
-    if !normalized.is_file() {
+    if !state.is_completed_output_path(&normalized) {
         return Err(CommandError::new(
-            "output_file_not_found",
-            "The output file does not exist",
+            "output_not_completed",
+            "The output path is not from a currently completed queue job",
         ));
     }
-    Ok(normalized)
+
+    let canonical = fs::canonicalize(&normalized).map_err(|error| {
+        CommandError::with_details(
+            "output_file_not_found",
+            "The completed output file does not exist",
+            error.to_string(),
+        )
+    })?;
+    if canonical != normalized || !state.is_registered_output_path(&canonical) {
+        return Err(CommandError::new(
+            "output_path_changed",
+            "The registered output path now resolves to a different file",
+        ));
+    }
+
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        CommandError::with_details(
+            "output_file_not_found",
+            "The completed output file is not accessible",
+            error.to_string(),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(CommandError::new(
+            "output_file_not_found",
+            "The completed output path is not a regular file",
+        ));
+    }
+    Ok(canonical)
 }
 
 fn registered_output_folder(state: &BackendState, path: &str) -> Result<PathBuf, CommandError> {
@@ -277,8 +310,19 @@ fn open_folder(folder: &Path) -> Result<(), CommandError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::domain::job::{JobState, ProcessingKind, QueueJob};
+    use crate::domain::media::{
+        AudioStreamInfo, MediaInfo, OutputFormat, OutputSettings, QualityPreset,
+    };
+    use crate::jobs::{
+        CancellationToken, EventSink, ExecutionOutcome, JobExecution, JobExecutor, Scheduler,
+    };
+    use crate::media::planner::ConversionPlan;
 
     use super::{registered_output_file, registered_output_folder, BackendState};
 
@@ -298,6 +342,109 @@ mod tests {
         let file = directory.join("clip.flac");
         fs::write(&file, b"fixture").expect("test file should be written");
         file
+    }
+
+    fn output_job(paused: bool) -> (BackendState, std::path::PathBuf) {
+        let output_path =
+            fs::canonicalize(temporary_output_file()).expect("test output should canonicalize");
+        let probe = Arc::new(|_: &Path| {
+            Ok::<_, crate::media::MediaError>(MediaInfo {
+                path: "/input/source.wav".to_owned(),
+                file_name: "source.wav".to_owned(),
+                container: "wav".to_owned(),
+                duration_seconds: 1.0,
+                size_bytes: 1,
+                video_streams: vec![],
+                audio_streams: vec![AudioStreamInfo {
+                    codec: "pcm_s16le".to_owned(),
+                    stream_index: 0,
+                    sample_rate_hz: 44_100,
+                    channels: 2,
+                }],
+                subtitle_streams: vec![],
+            })
+        });
+        let state = BackendState::with_test_scheduler(
+            Scheduler::new(Arc::new(ImmediateExecutor), 1),
+            probe,
+        );
+        if paused {
+            state
+                .scheduler
+                .pause()
+                .expect("test scheduler should pause");
+        }
+
+        state.authorize_output_path("test-job", output_path.clone());
+        state
+            .scheduler
+            .enqueue(JobExecution {
+                job: QueueJob {
+                    id: "test-job".to_owned(),
+                    attempt: 0,
+                    source_path: "/input/source.wav".to_owned(),
+                    media: MediaInfo {
+                        path: "/input/source.wav".to_owned(),
+                        file_name: "source.wav".to_owned(),
+                        container: "wav".to_owned(),
+                        duration_seconds: 1.0,
+                        size_bytes: 1,
+                        video_streams: vec![],
+                        audio_streams: vec![],
+                        subtitle_streams: vec![],
+                    },
+                    output_settings: OutputSettings {
+                        output_directory: output_path
+                            .parent()
+                            .expect("test output should have a parent")
+                            .to_string_lossy()
+                            .into_owned(),
+                        format: OutputFormat::Flac,
+                        quality: QualityPreset::Original,
+                        lossless_first: true,
+                        codec: None,
+                        bitrate_kbps: None,
+                        width: None,
+                        height: None,
+                        frame_rate: None,
+                        sample_rate_hz: None,
+                        channels: None,
+                    },
+                    processing_kind: None,
+                    state: JobState::Queued {
+                        label: "Queued".to_owned(),
+                    },
+                    progress: 0.0,
+                    output_path: None,
+                },
+                plan: ConversionPlan {
+                    processing_kind: ProcessingKind::LosslessAudio {
+                        label: "Lossless audio".to_owned(),
+                    },
+                    output_path: output_path.clone(),
+                    ffmpeg_args: vec![],
+                },
+            })
+            .expect("test job should enqueue");
+        if !paused {
+            assert!(state
+                .scheduler
+                .wait_for_idle(std::time::Duration::from_secs(1)));
+        }
+        (state, output_path)
+    }
+
+    struct ImmediateExecutor;
+
+    impl JobExecutor for ImmediateExecutor {
+        fn execute(
+            &self,
+            _execution: JobExecution,
+            _cancellation: CancellationToken,
+            _emit: EventSink,
+        ) -> Result<ExecutionOutcome, crate::domain::job::JobError> {
+            Ok(ExecutionOutcome::default())
+        }
     }
 
     #[test]
@@ -322,14 +469,43 @@ mod tests {
 
     #[test]
     fn accepts_registered_existing_output_preview_files() {
-        let output_path = temporary_output_file();
-        let state = BackendState::new();
-        state.authorize_output_path("test-job", output_path.clone());
+        let (state, output_path) = output_job(false);
 
         let normalized = registered_output_file(&state, &output_path.to_string_lossy())
             .expect("registered existing output files should be authorized");
 
         assert_eq!(normalized, output_path);
+        let _ = fs::remove_dir_all(output_path.parent().expect("fixture should have a parent"));
+    }
+
+    #[test]
+    fn rejects_registered_output_for_queued_job() {
+        let (state, output_path) = output_job(true);
+
+        let error = registered_output_file(&state, &output_path.to_string_lossy())
+            .expect_err("queued output must not be authorized for preview");
+
+        assert_eq!(error.code, "output_not_completed");
+        let _ = fs::remove_dir_all(output_path.parent().expect("fixture should have a parent"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_completed_output_replaced_by_symlink() {
+        let (state, output_path) = output_job(false);
+        let replacement = output_path
+            .parent()
+            .expect("fixture should have a parent")
+            .join("replacement.flac");
+        fs::write(&replacement, b"replacement").expect("replacement should be written");
+        fs::remove_file(&output_path).expect("original output should be removable");
+        std::os::unix::fs::symlink(&replacement, &output_path)
+            .expect("replacement symlink should be created");
+
+        let error = registered_output_file(&state, &output_path.to_string_lossy())
+            .expect_err("replaced output paths must not be authorized for preview");
+
+        assert_eq!(error.code, "output_path_changed");
         let _ = fs::remove_dir_all(output_path.parent().expect("fixture should have a parent"));
     }
 }

@@ -211,6 +211,16 @@ impl BackendState {
             .any(|authorized| authorized == path)
     }
 
+    pub(crate) fn is_completed_output_path(&self, path: &Path) -> bool {
+        self.scheduler.snapshot().jobs.iter().any(|job| {
+            matches!(
+                &job.state,
+                JobState::Completed { output_path, .. }
+                    if Path::new(output_path) == path
+            )
+        })
+    }
+
     pub(crate) fn is_registered_output_directory(&self, path: &Path) -> bool {
         self.selected_output_directories
             .lock()
