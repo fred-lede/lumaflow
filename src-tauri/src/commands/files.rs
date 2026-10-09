@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::domain::media::MediaInfo;
@@ -118,6 +118,42 @@ pub fn open_output_folder(
         .expect("command lock should succeed");
     let folder = registered_output_folder(&state, &path)?;
     open_folder(&folder)
+}
+
+#[tauri::command]
+pub fn allow_output_preview(
+    app: AppHandle,
+    state: State<'_, BackendState>,
+    path: String,
+) -> Result<String, CommandError> {
+    let normalized = registered_output_file(&state, &path)?;
+    app.asset_protocol_scope()
+        .allow_file(&normalized)
+        .map_err(|error| {
+            CommandError::with_details(
+                "preview_scope_failed",
+                "Could not authorize the output for preview",
+                error.to_string(),
+            )
+        })?;
+    Ok(normalized.to_string_lossy().into_owned())
+}
+
+fn registered_output_file(state: &BackendState, path: &str) -> Result<PathBuf, CommandError> {
+    let normalized = normalize_path_for_lookup(path)?;
+    if !state.is_registered_output_path(&normalized) {
+        return Err(CommandError::new(
+            "output_path_not_registered",
+            "The output path was not created by a validated queue job",
+        ));
+    }
+    if !normalized.is_file() {
+        return Err(CommandError::new(
+            "output_file_not_found",
+            "The output file does not exist",
+        ));
+    }
+    Ok(normalized)
 }
 
 fn registered_output_folder(state: &BackendState, path: &str) -> Result<PathBuf, CommandError> {
@@ -240,7 +276,29 @@ fn open_folder(folder: &Path) -> Result<(), CommandError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{registered_output_folder, BackendState};
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{registered_output_file, registered_output_folder, BackendState};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+    fn temporary_output_file() -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "lumaflow-preview-command-test-{}-{sequence}",
+            unique
+        ));
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        let file = directory.join("clip.flac");
+        fs::write(&file, b"fixture").expect("test file should be written");
+        file
+    }
 
     #[test]
     fn rejects_renderer_only_output_paths_before_opening_any_folder() {
@@ -250,5 +308,28 @@ mod tests {
             .expect_err("renderer-only output paths must not be opened");
 
         assert_eq!(error.code, "output_path_not_registered");
+    }
+
+    #[test]
+    fn rejects_unregistered_output_preview_paths() {
+        let state = BackendState::new();
+
+        let error = registered_output_file(&state, "/tmp/renderer-only/clip.flac")
+            .expect_err("renderer-only output paths must not be authorized");
+
+        assert_eq!(error.code, "output_path_not_registered");
+    }
+
+    #[test]
+    fn accepts_registered_existing_output_preview_files() {
+        let output_path = temporary_output_file();
+        let state = BackendState::new();
+        state.authorize_output_path("test-job", output_path.clone());
+
+        let normalized = registered_output_file(&state, &output_path.to_string_lossy())
+            .expect("registered existing output files should be authorized");
+
+        assert_eq!(normalized, output_path);
+        let _ = fs::remove_dir_all(output_path.parent().expect("fixture should have a parent"));
     }
 }
