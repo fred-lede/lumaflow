@@ -236,6 +236,24 @@ mod tests {
     }
 
     #[test]
+    fn plans_mp4_to_flac_as_audio_transcode() {
+        let plan = plan_conversion(&mp4_media(), &settings(OutputFormat::Flac))
+            .expect("MP4 audio should transcode to FLAC");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::Transcoding { .. }
+        ));
+        assert_eq!(
+            args(&plan),
+            vec![
+                "-i", "/input/movie.mp4", "-map", "0:1", "-vn", "-c:a", "flac",
+                "-compression_level", "5", "/output/movie.flac"
+            ]
+        );
+    }
+
+    #[test]
     fn stream_setting_change_forces_transcoding() {
         let mut output = settings(OutputFormat::Mp4);
         output.width = Some(1280);
@@ -718,6 +736,10 @@ pub fn plan_conversion(
             if is_pcm_source(media, &source_container)
                 && !has_stream_setting_changes(settings) =>
         {
+            require_audio(media)?;
+            ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
+        }
+        OutputFormat::Flac => {
             require_audio(media)?;
             ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
         }

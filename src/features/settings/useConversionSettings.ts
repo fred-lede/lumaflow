@@ -38,6 +38,12 @@ export const qualityPresets: Array<{ value: QualityPreset; label: string; descri
   { value: "small", label: "Small", description: "Prioritize a compact output" },
 ];
 
+const originalOnlyFormats = new Set<OutputFormat>(["flac", "wav", "webm", "avi", "ogg"]);
+
+export function qualityPresetsForFormat(format: OutputFormat) {
+  return originalOnlyFormats.has(format) ? qualityPresets.slice(0, 1) : qualityPresets;
+}
+
 export type SelectOption = { value: string; label: string };
 
 const codecOptionsByFormat: Partial<Record<OutputFormat, SelectOption[]>> = {
@@ -175,6 +181,12 @@ export function updateConversionSettings(
     } else {
       next.sampleRate = null;
       next.channels = null;
+    }
+  }
+  if (originalOnlyFormats.has(next.format)) {
+    next.preset = "original";
+    if (next.format === "flac" || next.format === "wav") {
+      next.bitrate = null;
     }
   }
   return next;

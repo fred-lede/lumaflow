@@ -55,9 +55,10 @@ export const AdvancedSettings: FC<AdvancedSettingsProps> = ({ expanded, settings
     <div className="advanced-settings" id="advanced-settings-panel">
       <div className="field-grid">
         {renderSelect("Codec", codecValue, resolvedCodecOptions, (value) => onChange({ codec: value || null }))}
-        {renderSelect("Audio bitrate", numberValue(settings.bitrate), bitrateOptions, (value) =>
-          onChange({ bitrate: numberOrNull(value) }),
-        )}
+        {!new Set(["wav", "flac"]).has(settings.format) &&
+          renderSelect("Audio bitrate", numberValue(settings.bitrate), bitrateOptions, (value) =>
+            onChange({ bitrate: numberOrNull(value) }),
+          )}
         {!audioOutput && (
           <>
             {renderSelect("Width", numberValue(settings.width), widthOptions, (value) =>

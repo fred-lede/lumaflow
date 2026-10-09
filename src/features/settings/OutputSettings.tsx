@@ -2,7 +2,7 @@ import type { FC } from "react";
 
 import AdvancedSettings from "./AdvancedSettings";
 import {
-  qualityPresets,
+  qualityPresetsForFormat,
   supportedOutputFormats,
   type ConversionSettings,
 } from "./useConversionSettings";
@@ -61,7 +61,7 @@ export const OutputSettings: FC<OutputSettingsProps> = ({
       <fieldset className="preset-fieldset">
         <legend>Quality preset</legend>
         <div className="preset-grid">
-          {qualityPresets.map((preset) => (
+            {qualityPresetsForFormat(settings.format).map((preset) => (
             <label className={`preset-option${settings.preset === preset.value ? " preset-option--selected" : ""}`} key={preset.value}>
               <input
                 type="radio"

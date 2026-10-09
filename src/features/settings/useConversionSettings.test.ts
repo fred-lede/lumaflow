@@ -7,6 +7,7 @@ import {
   defaultConversionSettings,
   codecOptionsForFormat,
   formatToOutputSettings,
+  qualityPresetsForFormat,
   qualityPresets,
   supportedOutputFormats,
   updateConversionSettings,
@@ -68,6 +69,14 @@ describe("useConversionSettings operations", () => {
     expect(settings.bitrate).toBeNull();
   });
 
+  it("limits FLAC to the lossless quality preset and normalizes when selected", () => {
+    const current = updateConversionSettings(defaultConversionSettings, { preset: "high" });
+    const settings = updateConversionSettings(current, { format: "flac" });
+
+    expect(qualityPresetsForFormat("flac").map((preset) => preset.value)).toEqual(["original"]);
+    expect(settings.preset).toBe("original");
+  });
+
   it("provides closed codec menus for supported output formats", () => {
     expect(codecOptionsForFormat("mp4")).toEqual([
       { value: "", label: "Backend default" },
@@ -93,10 +102,10 @@ describe("useConversionSettings operations", () => {
 
     expect(formatToOutputSettings(settings)).toMatchObject({
       format: "flac",
-      quality: "high",
+      quality: "original",
       losslessFirst: false,
       codec: "flac",
-      bitrateKbps: 192,
+      bitrateKbps: null,
       sampleRateHz: 96_000,
       channels: 2,
     });
