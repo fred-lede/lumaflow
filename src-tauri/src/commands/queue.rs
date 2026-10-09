@@ -211,14 +211,32 @@ impl BackendState {
             .any(|authorized| authorized == path)
     }
 
-    pub(crate) fn is_completed_output_path(&self, path: &Path) -> bool {
-        self.scheduler.snapshot().jobs.iter().any(|job| {
-            matches!(
+    pub(crate) fn is_registered_completed_output_path(&self, path: &Path) -> bool {
+        let authorized_output_paths = self
+            .authorized_output_paths
+            .lock()
+            .expect("output path lock should succeed");
+        let snapshot = self.scheduler.snapshot();
+        let mut found_registered_path = false;
+
+        for (job_id, _) in authorized_output_paths
+            .iter()
+            .filter(|(_, authorized_path)| *authorized_path == path)
+        {
+            found_registered_path = true;
+            let Some(job) = snapshot.jobs.iter().find(|job| job.id == *job_id) else {
+                return false;
+            };
+            if !matches!(
                 &job.state,
                 JobState::Completed { output_path, .. }
                     if Path::new(output_path) == path
-            )
-        })
+            ) {
+                return false;
+            }
+        }
+
+        found_registered_path
     }
 
     pub(crate) fn is_registered_output_directory(&self, path: &Path) -> bool {

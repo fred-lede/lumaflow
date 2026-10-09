@@ -152,7 +152,7 @@ fn registered_output_file(state: &BackendState, path: &str) -> Result<PathBuf, C
             "The output path was not created by a validated queue job",
         ));
     }
-    if !state.is_completed_output_path(&normalized) {
+    if !state.is_registered_completed_output_path(&normalized) {
         return Err(CommandError::new(
             "output_not_completed",
             "The output path is not from a currently completed queue job",
@@ -484,6 +484,74 @@ mod tests {
 
         let error = registered_output_file(&state, &output_path.to_string_lossy())
             .expect_err("queued output must not be authorized for preview");
+
+        assert_eq!(error.code, "output_not_completed");
+        let _ = fs::remove_dir_all(output_path.parent().expect("fixture should have a parent"));
+    }
+
+    #[test]
+    fn rejects_reused_output_path_when_a_new_job_is_queued() {
+        let (state, output_path) = output_job(false);
+        state
+            .scheduler
+            .pause()
+            .expect("test scheduler should pause");
+        fs::remove_file(&output_path).expect("old output should be removable");
+        state.authorize_output_path("new-job", output_path.clone());
+        state
+            .scheduler
+            .enqueue(JobExecution {
+                job: QueueJob {
+                    id: "new-job".to_owned(),
+                    attempt: 0,
+                    source_path: "/input/new-source.wav".to_owned(),
+                    media: MediaInfo {
+                        path: "/input/new-source.wav".to_owned(),
+                        file_name: "new-source.wav".to_owned(),
+                        container: "wav".to_owned(),
+                        duration_seconds: 1.0,
+                        size_bytes: 1,
+                        video_streams: vec![],
+                        audio_streams: vec![],
+                        subtitle_streams: vec![],
+                    },
+                    output_settings: OutputSettings {
+                        output_directory: output_path
+                            .parent()
+                            .expect("test output should have a parent")
+                            .to_string_lossy()
+                            .into_owned(),
+                        format: OutputFormat::Flac,
+                        quality: QualityPreset::Original,
+                        lossless_first: true,
+                        codec: None,
+                        bitrate_kbps: None,
+                        width: None,
+                        height: None,
+                        frame_rate: None,
+                        sample_rate_hz: None,
+                        channels: None,
+                    },
+                    processing_kind: None,
+                    state: JobState::Queued {
+                        label: "Queued".to_owned(),
+                    },
+                    progress: 0.0,
+                    output_path: None,
+                },
+                plan: ConversionPlan {
+                    processing_kind: ProcessingKind::LosslessAudio {
+                        label: "Lossless audio".to_owned(),
+                    },
+                    output_path: output_path.clone(),
+                    ffmpeg_args: vec![],
+                },
+            })
+            .expect("reused output path should be available after old output removal");
+        fs::write(&output_path, b"replacement").expect("replacement output should be written");
+
+        let error = registered_output_file(&state, &output_path.to_string_lossy())
+            .expect_err("a queued replacement must not use the old completed authorization");
 
         assert_eq!(error.code, "output_not_completed");
         let _ = fs::remove_dir_all(output_path.parent().expect("fixture should have a parent"));
