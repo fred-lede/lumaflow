@@ -10,11 +10,12 @@ use super::queue::{normalize_selected_path, BackendState};
 use super::CommandError;
 
 #[tauri::command]
-pub fn select_files(
+pub async fn select_files(
     app: AppHandle,
     state: State<'_, BackendState>,
 ) -> Result<Vec<String>, CommandError> {
-    let selected = app
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    app
         .dialog()
         .file()
         .set_title("Select media files")
@@ -24,7 +25,13 @@ pub fn select_files(
                 "mp4", "mov", "mkv", "webm", "avi", "mp3", "m4a", "wav", "flac", "ogg",
             ],
         )
-        .blocking_pick_files()
+        .pick_files(move |selected| {
+            let _ = sender.try_send(selected);
+        });
+    let selected = receiver
+        .recv()
+        .await
+        .ok_or_else(|| CommandError::new("file_picker_failed", "The file picker did not return a result"))?
         .unwrap_or_default();
 
     let mut paths = Vec::with_capacity(selected.len());
@@ -50,15 +57,22 @@ pub fn select_files(
 }
 
 #[tauri::command]
-pub fn select_output_folder(
+pub async fn select_output_folder(
     app: AppHandle,
     state: State<'_, BackendState>,
 ) -> Result<Option<String>, CommandError> {
-    let selected = app
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    app
         .dialog()
         .file()
         .set_title("Select output folder")
-        .blocking_pick_folder();
+        .pick_folder(move |selected| {
+            let _ = sender.try_send(selected);
+        });
+    let selected = receiver
+        .recv()
+        .await
+        .ok_or_else(|| CommandError::new("folder_picker_failed", "The folder picker did not return a result"))?;
     let Some(selected_path) = selected else {
         return Ok(None);
     };
@@ -151,6 +165,19 @@ fn normalize_path_for_lookup(raw_path: &str) -> Result<PathBuf, CommandError> {
             .join(path)
     };
     Ok(lexical_normalize(&absolute))
+}
+
+#[cfg(test)]
+mod picker_tests {
+    #[test]
+    fn native_pickers_are_async_and_do_not_use_blocking_dialogs() {
+        let source = include_str!("files.rs");
+
+        assert!(source.contains("pub async fn select_files"));
+        assert!(source.contains("pub async fn select_output_folder"));
+        assert!(!source.contains(&["blocking", "_pick_files"].concat()));
+        assert!(!source.contains(&["blocking", "_pick_folder"].concat()));
+    }
 }
 
 fn lexical_normalize(path: &Path) -> PathBuf {

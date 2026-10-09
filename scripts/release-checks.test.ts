@@ -54,7 +54,13 @@ function run(script: string, args: string[]): { status: number; output: string }
 
 describe("verify-ffmpeg-assets", () => {
   it("fails clearly when a target asset directory is absent", () => {
-    const result = run("scripts/verify-ffmpeg-assets.ts", ["--target", "darwin-arm64"]);
+    const missingDirectory = join(mkdtempSync(join(tmpdir(), "lumaflow-release-check-")), "missing-assets");
+    const result = run("scripts/verify-ffmpeg-assets.ts", [
+      "--target",
+      "darwin-arm64",
+      "--asset-dir",
+      missingDirectory,
+    ]);
 
     expect(result.status).not.toBe(0);
     expect(result.output).toMatch(/release assets are absent/i);
