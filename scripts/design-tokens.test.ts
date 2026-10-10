@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(resolve(here, "tokens.css"), "utf8");
+const repoRoot = join(import.meta.dirname, "..");
+const css = readFileSync(join(repoRoot, "src/styles/tokens.css"), "utf8");
 
 describe("design tokens", () => {
   it("uses the tightened radius scale", () => {

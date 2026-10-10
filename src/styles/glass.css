@@ -116,12 +116,17 @@ p {
   min-height: 2.75rem;
   padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--color-border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-surface-raised);
   color: var(--color-text);
   cursor: pointer;
   font-size: var(--font-size-body);
   font-weight: var(--font-weight-medium);
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .theme-toggle:hover {
@@ -281,6 +286,16 @@ h2 {
   border: var(--border-width) dashed var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
+}
+
+.drop-zone:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 .drop-zone__icon {
@@ -330,6 +345,11 @@ select {
   cursor: pointer;
   font-weight: var(--font-weight-bold);
   white-space: nowrap;
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .button:disabled {
@@ -345,6 +365,12 @@ select {
 
 .button--primary:hover:not(:disabled) {
   background: var(--color-accent-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-raised);
+}
+
+.button--primary:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .button--secondary:hover:not(:disabled) {
@@ -369,6 +395,11 @@ select {
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface-raised);
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .source-list__details {
@@ -453,6 +484,11 @@ select {
   cursor: pointer;
   font-size: 1.25rem;
   line-height: 1;
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .icon-button:hover {
@@ -542,6 +578,11 @@ input::placeholder {
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   cursor: pointer;
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .preset-option--selected {
@@ -574,6 +615,11 @@ input::placeholder {
   background: transparent;
   cursor: pointer;
   text-align: left;
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .advanced-toggle:hover {
@@ -719,6 +765,11 @@ input::placeholder {
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
+  transition: background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard);
 }
 
 .queue-row__main {
@@ -776,7 +827,7 @@ input::placeholder {
   min-height: 2rem;
   padding: var(--space-1) var(--space-2);
   border: var(--border-width) solid var(--color-border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: var(--font-size-supporting);
   font-weight: var(--font-weight-bold);
   white-space: nowrap;
@@ -886,7 +937,7 @@ input::placeholder {
   min-height: 2.5rem;
   padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--color-border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-surface-raised);
   color: var(--color-text);
   cursor: default;
@@ -974,6 +1025,15 @@ input::placeholder {
 
   .input-with-action {
     flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 
