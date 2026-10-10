@@ -152,19 +152,30 @@ export const AppShell: FC<AppShellProps> = ({
 
   const handleStartConversion = useCallback(async () => {
     setSettingsError(null);
+    const preflightVersion = outputDirectoryOverrideVersion.current;
+    const settingsAtPreflight = conversion.outputSettings;
     let normalizedOutputDirectory: string;
     try {
-      normalizedOutputDirectory = await validateOutputFolder(conversion.outputSettings.outputDirectory);
+      normalizedOutputDirectory = await validateOutputFolder(settingsAtPreflight.outputDirectory);
     } catch {
+      if (outputDirectoryOverrideVersion.current !== preflightVersion) {
+        setSettingsError("The output folder changed. Start conversion again.");
+        return;
+      }
       conversion.setSettings({ outputDirectory: "" });
       clearOutputDirectoryPreference(preferencesStorage);
       setSettingsError("The output folder is no longer available. Choose a new destination folder.");
       return;
     }
 
+    if (outputDirectoryOverrideVersion.current !== preflightVersion) {
+      setSettingsError("The output folder changed. Start conversion again.");
+      return;
+    }
+
     conversion.setSettings({ outputDirectory: normalizedOutputDirectory });
     const result = await intake.start({
-      ...conversion.outputSettings,
+      ...settingsAtPreflight,
       outputDirectory: normalizedOutputDirectory,
     });
     if (result?.failed.length) {

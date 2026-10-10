@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import AppShell, { handleSkipLinkActivation } from "./AppShell";
+import type { MediaInfo } from "../domain/media";
 import {
   preferencesStorageKey,
   readOutputPreferences,
@@ -52,6 +53,24 @@ function createStorage(): Storage {
 }
 
 let storage: Storage;
+
+function mediaInfo(path: string): MediaInfo {
+  return {
+    path,
+    fileName: path.split("/").pop() ?? path,
+    container: "mp4",
+    durationSeconds: 1,
+    sizeBytes: 1,
+    sourceQuality: {
+      status: "unknown",
+      summary: "Unknown source quality",
+      evidence: [],
+    },
+    videoStreams: [],
+    audioStreams: [],
+    subtitleStreams: [],
+  };
+}
 
 beforeEach(() => {
   storage = createStorage();
@@ -203,6 +222,64 @@ describe("App", () => {
     await waitFor(() => {
       expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
     });
+    expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "/new", format: "mp3" });
+  });
+
+  it("does not enqueue with a stale preflight path after Browse changes the folder", async () => {
+    let resolvePreflight: ((path: string) => void) | undefined;
+    const pendingPreflight = new Promise<string>((resolve) => {
+      resolvePreflight = resolve;
+    });
+    const selectOutputFolder = vi.fn()
+      .mockResolvedValueOnce("/old")
+      .mockResolvedValueOnce("/new");
+    const enqueueJobs = vi.fn(async () => ({ revision: 1, jobs: [], paused: false }));
+    validateOutputFolderMock.mockReturnValue(pendingPreflight);
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        intakeAdapter={{
+          ...testAppShellProps.intakeAdapter,
+          selectFiles: async () => ["/source.mp4"],
+          analyzeFiles: async (paths) => [mediaInfo(paths[0] ?? "/source.mp4")],
+        }}
+        preferencesStorage={storage}
+        queueCommands={{ enqueueJobs }}
+        selectOutputFolder={selectOutputFolder}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
+    });
+    await waitFor(() => expect(validateOutputFolderMock).toHaveBeenCalledWith("/old"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    });
+    expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
+
+    await act(async () => {
+      resolvePreflight?.("/normalized-old");
+      await pendingPreflight;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toBe("The output folder changed. Start conversion again.");
+    });
+    expect(enqueueJobs).not.toHaveBeenCalled();
+    expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
     expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "/new", format: "mp3" });
   });
 });
