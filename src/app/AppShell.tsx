@@ -11,6 +11,7 @@ import DropZone from "../features/intake/DropZone";
 import SourceFileList from "../features/intake/SourceFileList";
 import { useFileIntake, type FileIntakeAdapter } from "../features/intake/useFileIntake";
 import QueuePanel from "../features/queue/QueuePanel";
+import { queueProgressSummary } from "../features/queue/queueLabels";
 import {
   useQueueEvents,
   type QueueCommandAdapter,
@@ -209,6 +210,11 @@ export const AppShell: FC<AppShellProps> = ({
     }
   }, [conversion.outputSettings, conversion.setSettings, intake.start, preferencesStorage]);
 
+  const queueJobs = queue.state.order
+    .map((jobId) => queue.state.jobsById[jobId])
+    .filter((job): job is NonNullable<typeof job> => job !== undefined);
+  const progressSummary = queueProgressSummary(queueJobs);
+
   const readySourceCount = intake.sources.filter((source) => source.status === "ready").length;
 
   return (
@@ -222,6 +228,12 @@ export const AppShell: FC<AppShellProps> = ({
         </div>
         <div className="topbar-actions">
           <StatusBadge status="offline" label="Offline mode" />
+          {progressSummary ? (
+            <p className="topbar-progress">
+              <span aria-hidden="true">↻</span>
+              <span>{progressSummary}</span>
+            </p>
+          ) : null}
           <button
             className="theme-toggle"
             type="button"

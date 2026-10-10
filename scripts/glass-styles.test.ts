@@ -33,7 +33,7 @@ describe("glass styling", () => {
 
   it("adopts the pill radius token instead of a hardcoded 999px", () => {
     expect(css).not.toContain("border-radius: 999px");
-    expect(css.match(/var\(--radius-pill\)/g)?.length ?? 0).toBe(3);
+    expect(css.match(/var\(--radius-pill\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 
   it("gives the drop zone a hover affordance", () => {

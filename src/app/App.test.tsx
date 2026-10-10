@@ -605,4 +605,35 @@ describe("App", () => {
     expect(root.querySelectorAll(".workspace-topbar .eyebrow")).toHaveLength(0);
     expect(root.querySelector(".queue-count__value")).not.toBeNull();
   });
+
+  it("shows a conversion counter only while a job is processing", () => {
+    const idle = document.createElement("div");
+    idle.innerHTML = renderToStaticMarkup(<App />);
+    expect(idle.querySelector(".topbar-progress")).toBeNull();
+
+    const busy = document.createElement("div");
+    busy.innerHTML = renderToStaticMarkup(
+      <AppShell
+        {...testAppShellProps}
+        initialQueueSnapshot={{
+          revision: 1,
+          paused: false,
+          jobs: [
+            {
+              id: "j1",
+              sourcePath: "/a.mp4",
+              media: mediaInfo("/a.mp4"),
+              outputSettings: defaultSettingsForTest,
+              processingKind: null,
+              attempt: 1,
+              state: { kind: "transcoding", label: "Transcoding" },
+              progress: 0.4,
+              outputPath: null,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(busy.querySelector(".topbar-progress")?.textContent).toContain("Converting 1/1");
+  });
 });

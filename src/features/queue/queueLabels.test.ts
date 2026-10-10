@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { JobState, ProcessingKind } from "../../domain/job";
+import type { JobState, ProcessingKind, QueueJob } from "../../domain/job";
+import type { MediaInfo, OutputSettings } from "../../domain/media";
 import {
   canCancelJob,
   canRetryJob,
   canReorderJob,
+  isProcessingJob,
   processingKindVisibleLabel,
+  queueProgressSummary,
   queueStatusFor,
 } from "./queueLabels";
 
@@ -68,5 +71,89 @@ describe("queue labels", () => {
     expect(canReorderJob("queued")).toBe(true);
     expect(canReorderJob("transcoding")).toBe(false);
     expect(canReorderJob("completed")).toBe(false);
+  });
+});
+
+const media: MediaInfo = {
+  path: "/media/clip.mp4",
+  fileName: "clip.mp4",
+  container: "mp4",
+  durationSeconds: 1,
+  sizeBytes: 1,
+  sourceQuality: { status: "unknown", summary: "Unknown source quality", evidence: [] },
+  videoStreams: [],
+  audioStreams: [],
+  subtitleStreams: [],
+};
+
+const outputSettings: OutputSettings = {
+  outputDirectory: "",
+  format: "mp3",
+  quality: "original",
+  losslessFirst: true,
+  codec: null,
+  bitrateKbps: null,
+  width: null,
+  height: null,
+  frameRate: null,
+  sampleRateHz: null,
+  channels: null,
+};
+
+function stateFor(kind: JobState["kind"]): JobState {
+  switch (kind) {
+    case "completed":
+      return { kind: "completed", label: "Completed", outputPath: "/out.mp4" };
+    case "failed":
+      return { kind: "failed", label: "Failed", error: { code: "encode_failed", message: "stopped" } };
+    case "queued":
+      return { kind: "queued", label: "Queued" };
+    case "analyzing":
+      return { kind: "analyzing", label: "Analyzing" };
+    case "losslessRemux":
+      return { kind: "losslessRemux", label: "Lossless remux" };
+    case "losslessAudio":
+      return { kind: "losslessAudio", label: "Lossless audio" };
+    case "transcoding":
+      return { kind: "transcoding", label: "Transcoding" };
+    case "cancelled":
+      return { kind: "cancelled", label: "Cancelled" };
+  }
+}
+
+function job(kind: JobState["kind"], id: string): QueueJob {
+  return {
+    id,
+    sourcePath: `/media/${id}.mp4`,
+    media,
+    outputSettings,
+    processingKind: null,
+    attempt: 1,
+    state: stateFor(kind),
+    progress: 0,
+    outputPath: null,
+  };
+}
+
+describe("queue progress summary", () => {
+  it("counts only actively processing jobs", () => {
+    const jobs = [job("transcoding", "1"), job("analyzing", "2"), job("queued", "3")];
+    expect(queueProgressSummary(jobs)).toBe("Converting 2/3");
+  });
+
+  it("returns null when nothing is processing", () => {
+    expect(queueProgressSummary([job("queued", "1"), job("completed", "2")])).toBeNull();
+    expect(queueProgressSummary([])).toBeNull();
+  });
+
+  it("does not treat terminal or queued states as processing", () => {
+    expect(isProcessingJob("completed")).toBe(false);
+    expect(isProcessingJob("failed")).toBe(false);
+    expect(isProcessingJob("cancelled")).toBe(false);
+    expect(isProcessingJob("queued")).toBe(false);
+    expect(isProcessingJob("analyzing")).toBe(true);
+    expect(isProcessingJob("losslessRemux")).toBe(true);
+    expect(isProcessingJob("losslessAudio")).toBe(true);
+    expect(isProcessingJob("transcoding")).toBe(true);
   });
 });

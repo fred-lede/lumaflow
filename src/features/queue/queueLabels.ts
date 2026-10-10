@@ -1,4 +1,4 @@
-import type { JobState, ProcessingKind } from "../../domain/job";
+import type { JobState, ProcessingKind, QueueJob } from "../../domain/job";
 
 export type QueueStatusTone = "neutral" | "working" | "success" | "danger";
 
@@ -47,4 +47,16 @@ export function canOpenOutput(kind: JobState["kind"]): boolean {
 
 export function canReorderJob(kind: JobState["kind"]): boolean {
   return kind === "queued";
+}
+
+export function isProcessingJob(kind: JobState["kind"]): boolean {
+  return ["analyzing", "losslessRemux", "losslessAudio", "transcoding"].includes(kind);
+}
+
+export function queueProgressSummary(jobs: QueueJob[]): string | null {
+  const processing = jobs.filter((job) => isProcessingJob(job.state.kind)).length;
+  if (processing === 0) {
+    return null;
+  }
+  return `Converting ${processing}/${jobs.length}`;
 }
