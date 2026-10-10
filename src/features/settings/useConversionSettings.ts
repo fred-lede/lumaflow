@@ -148,7 +148,7 @@ export const channelOptions: SelectOption[] = [
 
 export const defaultConversionSettings: ConversionSettings = {
   outputDirectory: "",
-  format: "mp4",
+  format: "mp3",
   preset: "original",
   mode: "lossless-first",
   codec: null,

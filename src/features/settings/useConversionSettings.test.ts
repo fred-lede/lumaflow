@@ -16,6 +16,7 @@ import {
 describe("useConversionSettings operations", () => {
   it("starts lossless-first with all four quality presets available", () => {
     expect(defaultConversionSettings.mode).toBe("lossless-first");
+    expect(defaultConversionSettings.format).toBe("mp3");
     expect(defaultConversionSettings.preset).toBe("original");
     expect(qualityPresets.map((preset) => preset.value)).toEqual([
       "original",
@@ -41,7 +42,8 @@ describe("useConversionSettings operations", () => {
   });
 
   it("resets incompatible video fields when switching to an audio output", () => {
-    const settings = updateConversionSettings(defaultConversionSettings, {
+    const current = updateConversionSettings(defaultConversionSettings, { format: "mp4" });
+    const settings = updateConversionSettings(current, {
       width: 1_920,
       height: 1_080,
       frameRate: "24/1",
@@ -59,10 +61,13 @@ describe("useConversionSettings operations", () => {
   });
 
   it("resets codec and bitrate when switching output families", () => {
-    const current = updateConversionSettings(defaultConversionSettings, {
-      codec: "libx264",
-      bitrate: 192,
-    });
+    const current = updateConversionSettings(
+      updateConversionSettings(defaultConversionSettings, { format: "mp4" }),
+      {
+        codec: "libx264",
+        bitrate: 192,
+      },
+    );
     const settings = updateConversionSettings(current, { format: "mp3" });
 
     expect(settings.codec).toBeNull();
