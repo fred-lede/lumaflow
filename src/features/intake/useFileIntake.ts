@@ -48,7 +48,7 @@ const missingQueueCoordinator: EnqueueJobs = async () => {
 
 export type EnqueueSourceResult = {
   enqueuedIds: string[];
-  failed: Array<Pick<SourceFile, "id" | "path"> & { error: string }>;
+  failed: Array<Pick<SourceFile, "id" | "path"> & { code?: string; error: string }>;
 };
 
 const emptyAdapterOverrides: Partial<FileIntakeAdapter> = {};
@@ -160,10 +160,12 @@ export async function enqueueSourceFiles(
       await enqueue([request]);
       result.enqueuedIds.push(source.id);
     } catch (error) {
+      const normalized = LumaFlowError.from(error);
       result.failed.push({
         id: source.id,
         path: source.path,
-        error: LumaFlowError.from(error).message,
+        code: normalized.code,
+        error: normalized.message,
       });
     }
   }

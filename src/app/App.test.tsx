@@ -330,6 +330,49 @@ describe("App", () => {
     expect(enqueueJobs).not.toHaveBeenCalled();
   });
 
+  it("clears the folder when enqueue rejects after a successful output preflight", async () => {
+    const enqueueJobs = vi.fn().mockRejectedValue({
+      code: "output_directory_not_found",
+      message: "The output directory does not exist",
+    });
+    validateOutputFolderMock.mockResolvedValue("/normalized");
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        intakeAdapter={{
+          ...testAppShellProps.intakeAdapter,
+          selectFiles: async () => ["/source.mp4"],
+          analyzeFiles: async (paths) => [mediaInfo(paths[0] ?? "/source.mp4")],
+        }}
+        preferencesStorage={storage}
+        queueCommands={{ enqueueJobs }}
+        selectOutputFolder={async () => "/selected"}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("The output folder is no longer available. Choose a new destination folder.")).toBeTruthy();
+    });
+    expect(screen.queryByText("Some files could not be queued. Review the inline errors below.")).toBeNull();
+    expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("");
+    expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "", format: "mp3" });
+    expect(screen.getByText("The output directory does not exist")).toBeTruthy();
+    expect(enqueueJobs).toHaveBeenCalledOnce();
+  });
+
   it("enqueues with the normalized folder while preserving all output settings", async () => {
     const enqueueJobs = vi.fn(async () => ({ revision: 1, jobs: [], paused: false }));
     validateOutputFolderMock.mockResolvedValue("/normalized");

@@ -188,7 +188,16 @@ export const AppShell: FC<AppShellProps> = ({
         outputDirectory: normalizedOutputDirectory,
       });
       if (result?.failed.length) {
-        setSettingsError("Some files could not be queued. Review the inline errors below.");
+        const outputDirectoryUnavailable = result.failed.some(
+          ({ code }) => code === "output_directory_not_found" || code === "output_directory_not_directory",
+        );
+        if (outputDirectoryUnavailable) {
+          clearOutputDirectoryPreference(preferencesStorage);
+          conversion.setSettings({ outputDirectory: "" });
+          setSettingsError("The output folder is no longer available. Choose a new destination folder.");
+        } else {
+          setSettingsError("Some files could not be queued. Review the inline errors below.");
+        }
       }
     } finally {
       startInFlight.current = false;

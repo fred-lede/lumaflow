@@ -103,6 +103,27 @@ describe("useFileIntake operations", () => {
     ]);
   });
 
+  it("retains the backend code when enqueue rejects because the output directory disappeared", async () => {
+    const sources = await analyzeSourcePaths(["/media/disappeared.mov"], async (paths) =>
+      paths.map(mediaFor),
+    );
+    const enqueue = vi.fn<(requests: EnqueueJobRequest[]) => Promise<unknown>>().mockRejectedValue({
+      code: "output_directory_not_found",
+      message: "The output directory does not exist",
+    });
+
+    const result = await enqueueSourceFiles(sources, outputSettings, enqueue);
+
+    expect(result.failed).toEqual([
+      {
+        id: sources[0].id,
+        path: "/media/disappeared.mov",
+        code: "output_directory_not_found",
+        error: "The output directory does not exist",
+      },
+    ]);
+  });
+
   it("keeps rapid drops deduplicated and pending until out-of-order analysis settles", async () => {
     const deferred: Array<{
       paths: string[];
