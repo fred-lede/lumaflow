@@ -62,8 +62,10 @@ export const AppShell: FC<AppShellProps> = ({
   const [themeMode, setThemeMode] = useState<ThemeMode>("auto");
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [preferencesReady, setPreferencesReady] = useState(false);
+  const [startPending, setStartPending] = useState(false);
   const [savedPreferences] = useState(() => readOutputPreferences(preferencesStorage));
   const outputDirectoryOverrideVersion = useRef(0);
+  const startInFlight = useRef(false);
   const queue = useQueueEvents({
     commands: queueCommands,
     eventAdapter: queueEventAdapter,
@@ -151,35 +153,46 @@ export const AppShell: FC<AppShellProps> = ({
   }, [conversion.setSettings, selectOutputFolder]);
 
   const handleStartConversion = useCallback(async () => {
-    setSettingsError(null);
-    const preflightVersion = outputDirectoryOverrideVersion.current;
-    const settingsAtPreflight = conversion.outputSettings;
-    let normalizedOutputDirectory: string;
+    if (startInFlight.current) {
+      return;
+    }
+
+    startInFlight.current = true;
+    setStartPending(true);
     try {
-      normalizedOutputDirectory = await validateOutputFolder(settingsAtPreflight.outputDirectory);
-    } catch {
+      setSettingsError(null);
+      const preflightVersion = outputDirectoryOverrideVersion.current;
+      const settingsAtPreflight = conversion.outputSettings;
+      let normalizedOutputDirectory: string;
+      try {
+        normalizedOutputDirectory = await validateOutputFolder(settingsAtPreflight.outputDirectory);
+      } catch {
+        if (outputDirectoryOverrideVersion.current !== preflightVersion) {
+          setSettingsError("The output folder changed. Start conversion again.");
+          return;
+        }
+        conversion.setSettings({ outputDirectory: "" });
+        clearOutputDirectoryPreference(preferencesStorage);
+        setSettingsError("The output folder is no longer available. Choose a new destination folder.");
+        return;
+      }
+
       if (outputDirectoryOverrideVersion.current !== preflightVersion) {
         setSettingsError("The output folder changed. Start conversion again.");
         return;
       }
-      conversion.setSettings({ outputDirectory: "" });
-      clearOutputDirectoryPreference(preferencesStorage);
-      setSettingsError("The output folder is no longer available. Choose a new destination folder.");
-      return;
-    }
 
-    if (outputDirectoryOverrideVersion.current !== preflightVersion) {
-      setSettingsError("The output folder changed. Start conversion again.");
-      return;
-    }
-
-    conversion.setSettings({ outputDirectory: normalizedOutputDirectory });
-    const result = await intake.start({
-      ...settingsAtPreflight,
-      outputDirectory: normalizedOutputDirectory,
-    });
-    if (result?.failed.length) {
-      setSettingsError("Some files could not be queued. Review the inline errors below.");
+      conversion.setSettings({ outputDirectory: normalizedOutputDirectory });
+      const result = await intake.start({
+        ...settingsAtPreflight,
+        outputDirectory: normalizedOutputDirectory,
+      });
+      if (result?.failed.length) {
+        setSettingsError("Some files could not be queued. Review the inline errors below.");
+      }
+    } finally {
+      startInFlight.current = false;
+      setStartPending(false);
     }
   }, [conversion.outputSettings, conversion.setSettings, intake.start, preferencesStorage]);
 
@@ -289,6 +302,7 @@ export const AppShell: FC<AppShellProps> = ({
                   type="button"
                   disabled={
                     !preferencesReady ||
+                    startPending ||
                     !intake.canStart ||
                     conversion.settings.outputDirectory.length === 0
                   }

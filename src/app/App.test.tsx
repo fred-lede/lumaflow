@@ -390,4 +390,63 @@ describe("App", () => {
       }),
     ]);
   });
+
+  it("disables Start and deduplicates preflight while validation is pending", async () => {
+    let resolvePreflight: ((path: string) => void) | undefined;
+    const pendingPreflight = new Promise<string>((resolve) => {
+      resolvePreflight = resolve;
+    });
+    const enqueueJobs = vi.fn(async () => ({ revision: 1, jobs: [], paused: false }));
+    const validateOutputFolder = validateOutputFolderMock.mockReturnValue(pendingPreflight);
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        intakeAdapter={{
+          ...testAppShellProps.intakeAdapter,
+          selectFiles: async () => ["/source.mp4"],
+          analyzeFiles: async (paths) => [mediaInfo(paths[0] ?? "/source.mp4")],
+        }}
+        preferencesStorage={storage}
+        queueCommands={{ enqueueJobs }}
+        selectOutputFolder={async () => "/selected"}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    const startButton = screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(startButton);
+    });
+    await waitFor(() => expect(validateOutputFolder).toHaveBeenCalledTimes(1));
+    expect(startButton.disabled).toBe(true);
+
+    fireEvent.click(startButton);
+    expect(validateOutputFolder).toHaveBeenCalledTimes(1);
+    expect(enqueueJobs).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePreflight?.("/normalized");
+      await pendingPreflight;
+    });
+    await waitFor(() => expect(enqueueJobs).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
+    });
+    await waitFor(() => expect(validateOutputFolder).toHaveBeenCalledTimes(2));
+  });
 });
