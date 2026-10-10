@@ -93,4 +93,15 @@ describe("glass styling", () => {
       ).toBe(true);
     }
   });
+
+  it("constrains grid containers so a long file name cannot expand the row", () => {
+    for (const selector of [".queue-list {", ".queue-row__main {", ".source-list {"]) {
+      const start = css.indexOf(selector);
+      expect(start, `${selector} missing from glass.css`).toBeGreaterThan(-1);
+      const block = css.slice(start, css.indexOf("}", start));
+      expect(block, `${selector} must constrain its column or nowrap text leaks out`).toContain(
+        "minmax(0, 1fr)",
+      );
+    }
+  });
 });
