@@ -272,8 +272,6 @@ export const AppShell: FC<AppShellProps> = ({
               <DropZone pendingCount={intake.pendingCount} onSelectFiles={() => void intake.chooseFiles()} />
               <SourceFileList sources={intake.sources} onRemove={intake.removeSource} />
             </GlassPanel>
-
-            <QueuePanel controller={queue.controller} />
           </div>
 
           <div className="workspace-settings-column">
@@ -326,6 +324,8 @@ export const AppShell: FC<AppShellProps> = ({
               </div>
             </GlassPanel>
           </div>
+
+          <QueuePanel controller={queue.controller} />
         </div>
 
         <div

@@ -62,4 +62,10 @@ describe("glass styling", () => {
     expect(css).not.toContain(".card-step");
     expect(css).toContain(".queue-count__value");
   });
+
+  it("keeps long queue labels from forcing horizontal overflow", () => {
+    const rowBlock = css.slice(css.indexOf(".queue-row {"), css.indexOf(".queue-row__main {"));
+    expect(rowBlock).toContain("min-width: 0");
+    expect(css).toMatch(/\.queue-row__title strong \{[^}]*text-overflow: ellipsis/);
+  });
 });

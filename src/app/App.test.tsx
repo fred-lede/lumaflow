@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import AppShell, { handleSkipLinkActivation } from "./AppShell";
-import type { MediaInfo } from "../domain/media";
+import type { MediaInfo, OutputSettings } from "../domain/media";
 import {
   preferencesStorageKey,
   readOutputPreferences,
@@ -72,6 +72,20 @@ function mediaInfo(path: string): MediaInfo {
   };
 }
 
+const defaultSettingsForTest: OutputSettings = {
+  outputDirectory: "",
+  format: "mp3",
+  quality: "original",
+  losslessFirst: true,
+  codec: null,
+  bitrateKbps: null,
+  width: null,
+  height: null,
+  frameRate: null,
+  sampleRateHz: null,
+  channels: null,
+};
+
 beforeEach(() => {
   storage = createStorage();
   validateOutputFolderMock.mockReset();
@@ -113,7 +127,7 @@ describe("App", () => {
     expect(settingsColumn?.classList.contains("workspace-settings-column")).toBe(true);
     expect(sourceColumn?.querySelector(".workspace-card:not(.workspace-card--settings)")).not.toBeNull();
     expect(sourceColumn?.querySelector(".workspace-source-card")).not.toBeNull();
-    expect(sourceColumn?.querySelectorAll(".queue-panel")).toHaveLength(1);
+    expect(sourceColumn?.querySelectorAll(".queue-panel")).toHaveLength(0);
     expect(settingsColumn?.querySelector(".workspace-card--settings.workspace-settings-card")).not.toBeNull();
 
     const layout = layouts[0];
@@ -123,11 +137,8 @@ describe("App", () => {
 
     const layoutChildren = Array.from(layout.children);
     expect(layoutChildren.indexOf(sourceColumn)).toBeLessThan(layoutChildren.indexOf(settingsColumn));
-    const workspaceOrder = Array.from(
-      layout.querySelectorAll(".workspace-source-column, .queue-panel, .workspace-settings-column"),
-    );
-    expect(workspaceOrder.indexOf(queuePanel)).toBeLessThan(workspaceOrder.indexOf(settingsColumn));
-    expect(queuePanel.parentElement).toBe(sourceColumn);
+    expect(layoutChildren.indexOf(settingsColumn)).toBeLessThan(layoutChildren.indexOf(queuePanel));
+    expect(queuePanel.parentElement).toBe(layout);
   });
 
   it("focuses the main landmark when the skip link is activated", () => {
@@ -552,5 +563,36 @@ describe("App", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
     });
     await waitFor(() => expect(validateOutputFolder).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the queue out of the source column for a long file name", () => {
+    const longName = `${"x".repeat(300)}.mp4`;
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(
+      <AppShell
+        {...testAppShellProps}
+        initialQueueSnapshot={{
+          revision: 1,
+          paused: false,
+          jobs: [
+            {
+              id: "j1",
+              sourcePath: `/src/${longName}`,
+              media: mediaInfo(`/src/${longName}`),
+              outputSettings: defaultSettingsForTest,
+              processingKind: null,
+              attempt: 1,
+              state: { kind: "queued", label: "Queued" },
+              progress: 0,
+              outputPath: null,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const queuePanel = root.querySelector(".queue-panel");
+    expect(queuePanel).not.toBeNull();
+    expect(queuePanel?.closest(".workspace-source-column")).toBeNull();
   });
 });
