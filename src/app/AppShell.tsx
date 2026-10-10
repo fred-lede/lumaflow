@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FC, MouseEvent as ReactMouseEvent } from "react";
 
 import {
@@ -63,6 +63,7 @@ export const AppShell: FC<AppShellProps> = ({
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [savedPreferences] = useState(() => readOutputPreferences(preferencesStorage));
+  const outputDirectoryOverrideVersion = useRef(0);
   const queue = useQueueEvents({
     commands: queueCommands,
     eventAdapter: queueEventAdapter,
@@ -82,6 +83,7 @@ export const AppShell: FC<AppShellProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationVersion = outputDirectoryOverrideVersion.current;
 
     const hydratePreferences = async (): Promise<void> => {
       if (!savedPreferences?.outputDirectory) {
@@ -93,11 +95,11 @@ export const AppShell: FC<AppShellProps> = ({
 
       try {
         const normalizedDirectory = await validateOutputFolder(savedPreferences.outputDirectory);
-        if (!cancelled) {
+        if (!cancelled && outputDirectoryOverrideVersion.current === hydrationVersion) {
           conversion.setSettings({ outputDirectory: normalizedDirectory });
         }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && outputDirectoryOverrideVersion.current === hydrationVersion) {
           clearOutputDirectoryPreference(preferencesStorage);
         }
       } finally {
@@ -139,6 +141,7 @@ export const AppShell: FC<AppShellProps> = ({
     try {
       const folder = await selectOutputFolder();
       if (folder) {
+        outputDirectoryOverrideVersion.current += 1;
         conversion.setSettings({ outputDirectory: folder });
         setSettingsError(null);
       }

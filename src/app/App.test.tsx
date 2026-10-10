@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -168,5 +168,41 @@ describe("App", () => {
       expect((screen.getByLabelText("Format") as HTMLSelectElement).value).toBe("mp3");
     });
     expect(validateOutputFolderMock).toHaveBeenCalledWith("/saved");
+  });
+
+  it("keeps a newly browsed folder when saved-folder validation resolves later", async () => {
+    let resolveValidation: ((path: string) => void) | undefined;
+    const pendingValidation = new Promise<string>((resolve) => {
+      resolveValidation = resolve;
+    });
+    storage.setItem(
+      preferencesStorageKey,
+      JSON.stringify({ outputDirectory: "/old", format: "mp3" }),
+    );
+    validateOutputFolderMock.mockReturnValue(pendingValidation);
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        preferencesStorage={storage}
+        selectOutputFolder={async () => "/new"}
+      />,
+    );
+
+    await waitFor(() => expect(validateOutputFolderMock).toHaveBeenCalledWith("/old"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    });
+    expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
+
+    await act(async () => {
+      resolveValidation?.("/normalized-old");
+      await pendingValidation;
+    });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
+    });
+    expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "/new", format: "mp3" });
   });
 });
