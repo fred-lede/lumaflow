@@ -636,4 +636,14 @@ describe("App", () => {
     );
     expect(busy.querySelector(".topbar-progress")?.textContent).toContain("Converting 1/1");
   });
+
+  it("satisfies every layout selector the CSS relies on against the rendered markup", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(<AppShell {...testAppShellProps} />);
+
+    expect(root.querySelector(".workspace-layout > .queue-panel")).not.toBeNull();
+    expect(root.querySelector(".workspace-source-column > .queue-panel")).toBeNull();
+    expect(root.querySelector(".workspace-source-column > .workspace-source-card")).not.toBeNull();
+    expect(root.querySelector(".workspace-settings-column > .workspace-settings-card")).not.toBeNull();
+  });
 });

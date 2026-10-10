@@ -53,7 +53,13 @@ export function isProcessingJob(kind: JobState["kind"]): boolean {
   return ["analyzing", "losslessRemux", "losslessAudio", "transcoding"].includes(kind);
 }
 
-export function queueProgressSummary(jobs: QueueJob[]): string | null {
+export function queueProgressSummary(
+  jobs: QueueJob[],
+  options: { paused?: boolean } = {},
+): string | null {
+  if (options.paused) {
+    return null;
+  }
   const processing = jobs.filter((job) => isProcessingJob(job.state.kind)).length;
   if (processing === 0) {
     return null;

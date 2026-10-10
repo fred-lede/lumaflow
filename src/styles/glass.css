@@ -67,7 +67,7 @@ main:focus-visible {
   padding: var(--space-4) clamp(var(--space-5), 5vw, var(--space-12));
   border-bottom: var(--border-width) solid var(--color-border);
   background: var(--color-surface);
-  box-shadow: 0 0.5rem 2rem rgba(35, 61, 93, 0.06);
+  box-shadow: var(--shadow-raised);
   backdrop-filter: blur(var(--glass-blur));
 }
 

@@ -213,7 +213,7 @@ export const AppShell: FC<AppShellProps> = ({
   const queueJobs = queue.state.order
     .map((jobId) => queue.state.jobsById[jobId])
     .filter((job): job is NonNullable<typeof job> => job !== undefined);
-  const progressSummary = queueProgressSummary(queueJobs);
+  const progressSummary = queueProgressSummary(queueJobs, { paused: queue.state.paused });
 
   const readySourceCount = intake.sources.filter((source) => source.status === "ready").length;
 

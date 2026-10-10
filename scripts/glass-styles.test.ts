@@ -82,4 +82,15 @@ describe("glass styling", () => {
     expect(block).toContain("align-items: start");
     expect(block).not.toContain("align-items: stretch");
   });
+
+  it("keeps every box-shadow token-derived so prefers-contrast can suppress it", () => {
+    const declarations = [...css.matchAll(/box-shadow:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(declarations.length).toBeGreaterThan(0);
+    for (const value of declarations) {
+      expect(
+        value === "none" || value.startsWith("var(--shadow-"),
+        `literal box-shadow cannot be suppressed by prefers-contrast: ${value}`,
+      ).toBe(true);
+    }
+  });
 });

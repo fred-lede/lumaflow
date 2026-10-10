@@ -156,4 +156,15 @@ describe("queue progress summary", () => {
     expect(isProcessingJob("losslessAudio")).toBe(true);
     expect(isProcessingJob("transcoding")).toBe(true);
   });
+
+  it("stays quiet when the queue holds only terminal jobs", () => {
+    expect(queueProgressSummary([job("failed", "1"), job("cancelled", "2")])).toBeNull();
+    expect(queueProgressSummary([job("completed", "1")])).toBeNull();
+  });
+
+  it("stays quiet while the queue is paused", () => {
+    const jobs = [job("transcoding", "1"), job("transcoding", "2")];
+    expect(queueProgressSummary(jobs, { paused: true })).toBeNull();
+    expect(queueProgressSummary(jobs, { paused: false })).toBe("Converting 2/2");
+  });
 });
