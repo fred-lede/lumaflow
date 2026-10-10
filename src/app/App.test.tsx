@@ -282,4 +282,112 @@ describe("App", () => {
     expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
     expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "/new", format: "mp3" });
   });
+
+  it("clears the active and persisted folder when the Start preflight rejects", async () => {
+    storage.setItem(
+      preferencesStorageKey,
+      JSON.stringify({ outputDirectory: "", format: "mp3" }),
+    );
+    const enqueueJobs = vi.fn(async () => ({ revision: 1, jobs: [], paused: false }));
+    validateOutputFolderMock.mockRejectedValue({
+      code: "output_directory_not_found",
+      message: "The output folder does not exist",
+    });
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        intakeAdapter={{
+          ...testAppShellProps.intakeAdapter,
+          selectFiles: async () => ["/source.mp4"],
+          analyzeFiles: async (paths) => [mediaInfo(paths[0] ?? "/source.mp4")],
+        }}
+        preferencesStorage={storage}
+        queueCommands={{ enqueueJobs }}
+        selectOutputFolder={async () => "/old"}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toBe(
+        "The output folder is no longer available. Choose a new destination folder.",
+      );
+    });
+    expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("");
+    expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "", format: "mp3" });
+    expect(enqueueJobs).not.toHaveBeenCalled();
+  });
+
+  it("enqueues with the normalized folder while preserving all output settings", async () => {
+    const enqueueJobs = vi.fn(async () => ({ revision: 1, jobs: [], paused: false }));
+    validateOutputFolderMock.mockResolvedValue("/normalized");
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        intakeAdapter={{
+          ...testAppShellProps.intakeAdapter,
+          selectFiles: async () => ["/source.mp4"],
+          analyzeFiles: async (paths) => [mediaInfo(paths[0] ?? "/source.mp4")],
+        }}
+        preferencesStorage={storage}
+        queueCommands={{ enqueueJobs }}
+        selectOutputFolder={async () => "/selected"}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    fireEvent.change(screen.getByLabelText("Format"), { target: { value: "mp4" } });
+    fireEvent.change(screen.getByLabelText("Processing mode"), { target: { value: "transcode" } });
+    fireEvent.click(screen.getByRole("radio", { name: /High/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced settings/ }));
+    fireEvent.change(screen.getByLabelText("Codec"), { target: { value: "libx264" } });
+    fireEvent.change(screen.getByLabelText("Width"), { target: { value: "1920" } });
+    fireEvent.change(screen.getByLabelText("Height"), { target: { value: "1080" } });
+    fireEvent.change(screen.getByLabelText("Frame rate"), { target: { value: "30/1" } });
+    fireEvent.change(screen.getByLabelText("Audio bitrate"), { target: { value: "320" } });
+    fireEvent.change(screen.getByLabelText("Sample rate (Hz)"), { target: { value: "48000" } });
+    fireEvent.change(screen.getByLabelText("Channels"), { target: { value: "2" } });
+
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
+    });
+
+    await waitFor(() => expect(enqueueJobs).toHaveBeenCalledOnce());
+    expect(enqueueJobs).toHaveBeenCalledWith([
+      expect.objectContaining({
+        outputSettings: {
+          outputDirectory: "/normalized",
+          format: "mp4",
+          quality: "high",
+          losslessFirst: false,
+          codec: "libx264",
+          bitrateKbps: 320,
+          width: 1920,
+          height: 1080,
+          frameRate: "30/1",
+          sampleRateHz: 48000,
+          channels: 2,
+        },
+      }),
+    ]);
+  });
 });
