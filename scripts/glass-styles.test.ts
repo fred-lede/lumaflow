@@ -44,4 +44,22 @@ describe("glass styling", () => {
     expect(css).toContain(".button--primary:hover:not(:disabled)");
     expect(css).toContain("translateY(-1px)");
   });
+
+  it("removes the dead h1 rule that .workspace-title overrides", () => {
+    expect(css).not.toMatch(/\nh1 \{/);
+  });
+
+  it("stops forcing a 20rem card height", () => {
+    expect(css).not.toContain("min-height: 20rem");
+  });
+
+  it("spans the queue across the full desktop row", () => {
+    expect(css).toContain("queue  queue");
+    expect(css).not.toContain('"queue ."');
+  });
+
+  it("drops the card step class and provides a queue-count value class", () => {
+    expect(css).not.toContain(".card-step");
+    expect(css).toContain(".queue-count__value");
+  });
 });

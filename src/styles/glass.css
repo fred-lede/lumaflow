@@ -147,13 +147,6 @@ p {
   margin-bottom: var(--space-8);
 }
 
-h1 {
-  margin-top: var(--space-2);
-  font-size: 2rem;
-  line-height: var(--line-height-tight);
-  letter-spacing: -0.04em;
-}
-
 .workspace-title {
   max-width: 42rem;
   margin-top: var(--space-2);
@@ -191,7 +184,7 @@ h1 {
     grid-template-columns: minmax(18rem, 0.85fr) minmax(30rem, 1.15fr);
     grid-template-areas:
       "source settings"
-      "queue .";
+      "queue  queue";
     grid-template-rows: auto auto;
     align-items: stretch;
   }
@@ -223,7 +216,7 @@ h1 {
 }
 
 .workspace-card {
-  min-height: 20rem;
+  min-height: 0;
   padding: clamp(var(--space-5), 4vw, var(--space-8));
 }
 
@@ -237,13 +230,6 @@ h2 {
   margin-top: var(--space-1);
   font-size: 1.375rem;
   line-height: var(--line-height-tight);
-}
-
-.card-step {
-  color: var(--color-text-subtle);
-  font-size: var(--font-size-supporting);
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--font-weight-bold);
 }
 
 .workspace-card > .supporting-text {
@@ -736,6 +722,13 @@ input::placeholder {
 
 .queue-count dd {
   margin: 0;
+}
+
+.queue-count__value {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-supporting);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-bold);
 }
 
 .queue-toolbar {
