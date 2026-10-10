@@ -42,6 +42,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::files::select_files,
             commands::files::select_output_folder,
+            commands::files::validate_output_folder,
             commands::files::analyze_files,
             commands::files::consume_dropped_paths,
             commands::files::open_output_folder,
@@ -68,6 +69,7 @@ mod tests {
         for command in [
             "commands::files::select_files",
             "commands::files::select_output_folder",
+            "commands::files::validate_output_folder",
             "commands::files::analyze_files",
             "commands::files::consume_dropped_paths",
             "commands::files::open_output_folder",

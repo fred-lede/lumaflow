@@ -14,6 +14,7 @@ import {
   authorizeOutputPreview,
   outputPreviewUrl,
   selectOutputFolder,
+  validateOutputFolder,
 } from "./tauri";
 
 const { mockedGetCurrentWebview, mockedGetCurrentWindow } = vi.hoisted(() => ({
@@ -129,6 +130,16 @@ describe("typed Tauri wrappers", () => {
 
     expect(mockedInvoke).toHaveBeenNthCalledWith(1, "select_output_folder");
     expect(mockedInvoke).toHaveBeenNthCalledWith(2, "clear_completed");
+  });
+
+  it("validates and registers an output folder through the backend", async () => {
+    mockedInvoke.mockResolvedValue("/normalized/output");
+
+    await expect(validateOutputFolder("/output/./folder")).resolves.toBe("/normalized/output");
+
+    expect(mockedInvoke).toHaveBeenCalledWith("validate_output_folder", {
+      path: "/output/./folder",
+    });
   });
 
   it("passes a validated queue order to the typed reorder command", async () => {

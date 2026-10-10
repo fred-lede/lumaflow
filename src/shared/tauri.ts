@@ -108,6 +108,10 @@ export function selectOutputFolder(): Promise<string | null> {
   return invokeLumaFlow<string | null>("select_output_folder");
 }
 
+export function validateOutputFolder(path: string): Promise<string> {
+  return invokeLumaFlow<string>("validate_output_folder", { path });
+}
+
 export function analyzeFiles(paths: string[]): Promise<MediaInfo[]> {
   return invokeLumaFlow<MediaInfo[]>("analyze_files", { paths });
 }

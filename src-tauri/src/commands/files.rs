@@ -89,6 +89,23 @@ pub async fn select_output_folder(
     Ok(Some(normalized.to_string_lossy().into_owned()))
 }
 
+pub(crate) fn validate_and_register_output_directory(
+    state: &BackendState,
+    raw_path: &str,
+) -> Result<String, CommandError> {
+    let normalized = super::queue::normalize_existing_directory(raw_path)?;
+    state.remember_output_directory(normalized.clone());
+    Ok(normalized.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn validate_output_folder(
+    state: State<'_, BackendState>,
+    path: String,
+) -> Result<String, CommandError> {
+    validate_and_register_output_directory(&state, &path)
+}
+
 #[tauri::command]
 pub fn analyze_files(
     state: State<'_, BackendState>,
@@ -324,7 +341,10 @@ mod tests {
     };
     use crate::media::planner::ConversionPlan;
 
-    use super::{registered_output_file, registered_output_folder, BackendState};
+    use super::{
+        registered_output_file, registered_output_folder, validate_and_register_output_directory,
+        BackendState,
+    };
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -447,6 +467,45 @@ mod tests {
         ) -> Result<ExecutionOutcome, crate::domain::job::JobError> {
             Ok(ExecutionOutcome::default())
         }
+    }
+
+    #[test]
+    fn validates_normalizes_and_registers_existing_output_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "lumaflow-output-directory-validation-{}-existing",
+            std::process::id()
+        ));
+        let nested = directory.join("nested");
+        fs::create_dir_all(&nested).expect("test output directory should be created");
+        let state = BackendState::new();
+        let raw_path = nested.join("..");
+        let expected =
+            fs::canonicalize(&directory).expect("test output directory should canonicalize");
+
+        let normalized = validate_and_register_output_directory(
+            &state,
+            &raw_path.to_string_lossy(),
+        )
+        .expect("existing output directory should validate");
+
+        assert_eq!(normalized, expected.to_string_lossy());
+        assert!(state.is_registered_output_directory(&expected));
+        fs::remove_dir_all(&directory).expect("test output directory should be cleaned up");
+    }
+
+    #[test]
+    fn rejects_missing_output_directory_without_registering_it() {
+        let directory = std::env::temp_dir().join(format!(
+            "lumaflow-output-directory-validation-{}-missing",
+            std::process::id()
+        ));
+        let state = BackendState::new();
+
+        let error = validate_and_register_output_directory(&state, &directory.to_string_lossy())
+            .expect_err("missing output directory should be rejected");
+
+        assert_eq!(error.code, "output_directory_not_found");
+        assert!(!state.is_registered_output_directory(&directory));
     }
 
     #[test]
