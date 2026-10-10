@@ -424,6 +424,9 @@ mod tests {
         assert!(error.message.contains("not proven safe"));
         assert!(error.message.contains("compatible codecs"));
         assert!(error.message.contains("Always transcode"));
+        assert!(error
+            .message
+            .contains("or remove unsupported subtitle or unknown streams."));
     }
 
     #[test]
@@ -658,6 +661,9 @@ mod tests {
         assert!(error.message.contains("not proven safe"));
         assert!(error.message.contains("compatible codecs"));
         assert!(error.message.contains("Always transcode"));
+        assert!(error
+            .message
+            .contains("or remove unsupported subtitle or unknown streams."));
     }
 
     #[test]
@@ -779,7 +785,11 @@ pub fn plan_conversion(
             return Err(MediaError::new(
                 "unsupported_conversion",
                 format!(
-                    "The requested {} conversion is not proven safe for the selected streams. Choose compatible codecs in Advanced settings or use Always transcode when supported.",
+                    concat!(
+                        "The requested {} conversion is not proven safe for the selected streams. ",
+                        "Choose compatible codecs in Advanced settings or use Always transcode when supported, ",
+                        "or remove unsupported subtitle or unknown streams."
+                    ),
                     output_format.display_name()
                 ),
             ));
