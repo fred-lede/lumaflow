@@ -19,13 +19,18 @@
   --space-8: 2rem;
   --space-10: 2.5rem;
   --space-12: 3rem;
-  --radius-sm: 0.75rem;
-  --radius-md: 1rem;
-  --radius-lg: 1.5rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-pill: 999px;
   --border-width: 1px;
   --focus-ring-width: 3px;
   --focus-ring-offset: 3px;
   --glass-blur: 22px;
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
   --color-canvas: #eef3f9;
   --color-canvas-glow: #d9e7fa;
   --color-surface: rgba(255, 255, 255, 0.7);
@@ -47,6 +52,7 @@
   --color-warning-soft: rgba(142, 91, 0, 0.14);
   --color-focus: #075dcc;
   --shadow-panel: 0 1rem 3rem rgba(35, 61, 93, 0.12);
+  --shadow-raised: 0 0.5rem 1.5rem rgba(35, 61, 93, 0.08);
 }
 
 :root[data-theme="light"] {
@@ -76,6 +82,7 @@
   --color-warning-soft: rgba(255, 210, 126, 0.16);
   --color-focus: #a8ceff;
   --shadow-panel: 0 1rem 3rem rgba(0, 0, 0, 0.28);
+  --shadow-raised: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.3);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -102,6 +109,7 @@
     --color-warning-soft: rgba(255, 210, 126, 0.16);
     --color-focus: #a8ceff;
     --shadow-panel: 0 1rem 3rem rgba(0, 0, 0, 0.28);
+    --shadow-raised: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -119,5 +127,6 @@
     --color-text-muted: var(--color-text);
     --color-text-subtle: var(--color-text);
     --shadow-panel: none;
+    --shadow-raised: none;
   }
 }
