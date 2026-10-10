@@ -348,6 +348,14 @@ mod tests {
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
+    struct TestDirectoryGuard(std::path::PathBuf);
+
+    impl Drop for TestDirectoryGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn temporary_output_file() -> std::path::PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -471,10 +479,12 @@ mod tests {
 
     #[test]
     fn validates_normalizes_and_registers_existing_output_directory() {
+        let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(
-            "lumaflow-output-directory-validation-{}-existing",
-            std::process::id()
+            "lumaflow-output-directory-validation-{}-{sequence}-existing",
+            std::process::id(),
         ));
+        let _cleanup = TestDirectoryGuard(directory.clone());
         let nested = directory.join("nested");
         fs::create_dir_all(&nested).expect("test output directory should be created");
         let state = BackendState::new();
@@ -490,7 +500,6 @@ mod tests {
 
         assert_eq!(normalized, expected.to_string_lossy());
         assert!(state.is_registered_output_directory(&expected));
-        fs::remove_dir_all(&directory).expect("test output directory should be cleaned up");
     }
 
     #[test]
