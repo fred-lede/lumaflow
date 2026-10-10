@@ -125,6 +125,7 @@ describe("useAudioPreview", () => {
       await result.current.play("/output/clip.mp3");
     });
     act(() => result.current.stop());
+    audio.src = "preview://stale-output.mp3";
     act(() => result.current.handleError());
 
     expect(result.current.error).toBeNull();

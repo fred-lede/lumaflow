@@ -36,6 +36,7 @@ export function useAudioPreview(
 ): AudioPreviewController {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const activePathRef = useRef<string | null>(null);
+  const mediaOperationRef = useRef<number | null>(null);
   const authorizedPathRef = useRef(new Map<string, string>());
   const pendingAuthorizationRef = useRef(new Map<string, Promise<string>>());
   const operationRef = useRef(0);
@@ -51,6 +52,7 @@ export function useAudioPreview(
       audio.load();
     }
     activePathRef.current = null;
+    mediaOperationRef.current = null;
     if (updateState) {
       setActivePath(null);
       setError(null);
@@ -109,6 +111,7 @@ export function useAudioPreview(
         return Promise.reject(new Error("Audio preview element is unavailable"));
       }
 
+      mediaOperationRef.current = operation;
       audio.src = adapter.outputPreviewUrl(authorizedPath);
       audio.load();
       return audio.play().then(() => {
@@ -176,7 +179,7 @@ export function useAudioPreview(
   }, [resetAudio]);
 
   const handleError = useCallback((): void => {
-    if (!audioRef.current?.src) {
+    if (!audioRef.current?.src || mediaOperationRef.current === null) {
       return;
     }
     operationRef.current += 1;
