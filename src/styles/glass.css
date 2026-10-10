@@ -204,7 +204,7 @@ p {
       "source settings"
       "queue  queue";
     grid-template-rows: auto auto;
-    align-items: stretch;
+    align-items: start;
   }
 
   .workspace-source-column,
@@ -216,7 +216,7 @@ p {
     grid-area: source;
   }
 
-  .workspace-source-column > .queue-panel {
+  .workspace-layout > .queue-panel {
     grid-area: queue;
   }
 
@@ -725,7 +725,7 @@ input::placeholder {
   padding: clamp(var(--space-5), 4vw, var(--space-8));
 }
 
-.workspace-source-column .queue-panel {
+.workspace-layout > .queue-panel {
   margin-top: 0;
 }
 

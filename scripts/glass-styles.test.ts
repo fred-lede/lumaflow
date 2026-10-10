@@ -68,4 +68,18 @@ describe("glass styling", () => {
     expect(rowBlock).toContain("min-width: 0");
     expect(css).toMatch(/\.queue-row__title strong \{[^}]*text-overflow: ellipsis/);
   });
+
+  it("assigns the queue to the full-width grid area now that it is a layout child", () => {
+    expect(css).toContain(".workspace-layout > .queue-panel");
+    expect(css).not.toContain(".workspace-source-column > .queue-panel");
+    expect(css).not.toContain(".workspace-source-column .queue-panel");
+  });
+
+  it("lets workspace cards size to their content instead of stretching", () => {
+    const start = css.indexOf("@media (min-width: 52rem)");
+    const end = css.indexOf("@media", start + 10);
+    const block = css.slice(start, end > -1 ? end : undefined);
+    expect(block).toContain("align-items: start");
+    expect(block).not.toContain("align-items: stretch");
+  });
 });
