@@ -153,6 +153,19 @@ mod tests {
     }
 
     #[test]
+    fn compatible_mp4_streams_can_remux_to_mov_without_overrides() {
+        let plan = plan_conversion(&mp4_media(), &settings(OutputFormat::Mov))
+            .expect("compatible MP4 streams should remux into MOV");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::LosslessRemux { .. }
+        ));
+        assert_eq!(plan.output_path, std::path::PathBuf::from("/output/movie.mov"));
+        assert!(args(&plan).contains(&"copy".to_owned()));
+    }
+
+    #[test]
     fn real_style_m4a_container_can_remux_to_m4a_when_streams_are_compatible() {
         let mut media = mp4_media();
         media.path = "/input/audio.m4a".to_owned();
@@ -299,6 +312,38 @@ mod tests {
             ProcessingKind::Transcoding { .. }
         ));
         assert!(args(&plan).contains(&"libx264".to_owned()));
+    }
+
+    #[test]
+    fn always_transcode_allows_mp4_to_mov_without_advanced_overrides() {
+        let mut output = settings(OutputFormat::Mov);
+        output.lossless_first = false;
+
+        let plan = plan_conversion(&mp4_media(), &output)
+            .expect("Always transcode should support MP4 to MOV");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::Transcoding { .. }
+        ));
+        assert!(args(&plan).windows(2).any(|pair| pair == ["-c:v", "libx264"]));
+        assert!(args(&plan).windows(2).any(|pair| pair == ["-c:a", "aac"]));
+    }
+
+    #[test]
+    fn always_transcode_allows_mp4_to_m4a_without_advanced_overrides() {
+        let mut output = settings(OutputFormat::M4a);
+        output.lossless_first = false;
+
+        let plan = plan_conversion(&mp4_media(), &output)
+            .expect("Always transcode should extract MP4 audio into M4A");
+
+        assert!(matches!(
+            plan.processing_kind,
+            ProcessingKind::Transcoding { .. }
+        ));
+        assert!(args(&plan).contains(&"-vn".to_owned()));
+        assert!(args(&plan).windows(2).any(|pair| pair == ["-c:a", "aac"]));
     }
 
     #[test]
@@ -735,8 +780,7 @@ pub fn plan_conversion(
     let source_container = resolve_container_name(&media.container, &media.path)?;
     let output_format = &settings.format;
     let mode = match output_format {
-        format if source_container == format.container_name()
-            && streams_fit_container(media, format)
+        format if streams_fit_container(media, format)
             && !has_stream_setting_changes(settings)
             && settings.lossless_first => ProcessingMode::LosslessRemux(ArgumentMode::AllStreams),
         OutputFormat::Mp3 => {
@@ -771,7 +815,7 @@ pub fn plan_conversion(
             }),
         format
             if is_known_output(format)
-                && has_stream_setting_changes(settings)
+                && (!settings.lossless_first || has_stream_setting_changes(settings))
                 && can_transcode_to(media, format) =>
         {
             require_media_stream(media)?;
@@ -1237,7 +1281,7 @@ fn can_transcode_to(media: &MediaInfo, format: &OutputFormat) -> bool {
             !has_subtitles && (has_video || has_audio)
         }
         OutputFormat::M4a | OutputFormat::Wav | OutputFormat::Flac => {
-            !has_video && !has_subtitles && has_audio
+            !has_subtitles && has_audio
         }
         OutputFormat::Mp3 => !has_subtitles && has_audio,
         OutputFormat::Webm | OutputFormat::Avi | OutputFormat::Ogg => false,
