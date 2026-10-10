@@ -187,6 +187,10 @@ export const AppShell: FC<AppShellProps> = ({
         ...settingsAtPreflight,
         outputDirectory: normalizedOutputDirectory,
       });
+      if (outputDirectoryOverrideVersion.current !== preflightVersion) {
+        setSettingsError("The output folder changed. Start conversion again.");
+        return;
+      }
       if (result?.failed.length) {
         const outputDirectoryUnavailable = result.failed.some(
           ({ code }) => code === "output_directory_not_found" || code === "output_directory_not_directory",

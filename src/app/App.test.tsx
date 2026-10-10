@@ -373,6 +373,67 @@ describe("App", () => {
     expect(enqueueJobs).toHaveBeenCalledOnce();
   });
 
+  it("keeps a newly browsed folder when an older enqueue result rejects", async () => {
+    let rejectEnqueue: ((error: unknown) => void) | undefined;
+    const pendingEnqueue = new Promise<never>((_, reject) => {
+      rejectEnqueue = reject;
+    });
+    const enqueueJobs = vi.fn(() => pendingEnqueue);
+    const selectOutputFolder = vi.fn()
+      .mockResolvedValueOnce("/old")
+      .mockResolvedValueOnce("/new");
+    validateOutputFolderMock.mockResolvedValue("/normalized");
+
+    render(
+      <AppShell
+        {...testAppShellProps}
+        intakeAdapter={{
+          ...testAppShellProps.intakeAdapter,
+          selectFiles: async () => ["/source.mp4"],
+          analyzeFiles: async (paths) => [mediaInfo(paths[0] ?? "/source.mp4")],
+        }}
+        preferencesStorage={storage}
+        queueCommands={{ enqueueJobs }}
+        selectOutputFolder={selectOutputFolder}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose files" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start conversion" }));
+    });
+    await waitFor(() => expect(enqueueJobs).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    });
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
+      expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "/new", format: "mp3" });
+    });
+
+    await act(async () => {
+      rejectEnqueue?.({
+        code: "output_directory_not_found",
+        message: "The output directory does not exist",
+      });
+      await pendingEnqueue.catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("The output folder changed. Start conversion again.")).toBeTruthy();
+    });
+    expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/new");
+    expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "/new", format: "mp3" });
+  });
+
   it("enqueues with the normalized folder while preserving all output settings", async () => {
     const enqueueJobs = vi.fn(async () => ({ revision: 1, jobs: [], paused: false }));
     validateOutputFolderMock.mockResolvedValue("/normalized");
