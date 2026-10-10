@@ -218,7 +218,6 @@ export const AppShell: FC<AppShellProps> = ({
       </a>
       <header className="workspace-topbar">
         <div>
-          <p className="eyebrow">Lossless-first media converter</p>
           <p className="brand-name">LumaFlow</p>
         </div>
         <div className="topbar-actions">
@@ -262,9 +261,6 @@ export const AppShell: FC<AppShellProps> = ({
                   <p className="eyebrow">Source media</p>
                   <h2 id="sources-title">Files</h2>
                 </div>
-                <span className="card-step" aria-hidden="true">
-                  01
-                </span>
               </div>
               <p className="supporting-text">
                 Choose one or more files to inspect their format and duration before conversion.
@@ -285,9 +281,6 @@ export const AppShell: FC<AppShellProps> = ({
                   <p className="eyebrow">Configuration</p>
                   <h2 id="settings-title">Output settings</h2>
                 </div>
-                <span className="card-step" aria-hidden="true">
-                  02
-                </span>
               </div>
               <p className="supporting-text">
                 Lossless-first is the default. Expand advanced settings only when the source needs a custom stream.

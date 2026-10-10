@@ -595,4 +595,14 @@ describe("App", () => {
     expect(queuePanel).not.toBeNull();
     expect(queuePanel?.closest(".workspace-source-column")).toBeNull();
   });
+
+  it("renders no card step numbers and keeps the queue count semantically separate", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(<App />);
+
+    expect(root.querySelector(".card-step")).toBeNull();
+    expect(root.querySelector(".brand-name")?.textContent).toBe("LumaFlow");
+    expect(root.querySelectorAll(".workspace-topbar .eyebrow")).toHaveLength(0);
+    expect(root.querySelector(".queue-count__value")).not.toBeNull();
+  });
 });

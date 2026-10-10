@@ -157,7 +157,7 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
         </div>
         <dl className="queue-count">
           <dt className="sr-only">Queue items</dt>
-          <dd className="card-step">{jobs.length.toString().padStart(2, "0")}</dd>
+          <dd className="queue-count__value">{jobs.length.toString().padStart(2, "0")}</dd>
         </dl>
       </div>
       <p className="supporting-text queue-panel__intro">
