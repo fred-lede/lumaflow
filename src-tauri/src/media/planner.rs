@@ -787,7 +787,8 @@ pub fn plan_conversion(
                 format!(
                     concat!(
                         "The requested {} conversion is not proven safe for the selected streams. ",
-                        "Choose compatible codecs in Advanced settings or use Always transcode when supported, ",
+                        "Choose compatible codecs in Advanced settings or use Always transcode ",
+                        "when supported, ",
                         "or remove unsupported subtitle or unknown streams."
                     ),
                     output_format.display_name()
