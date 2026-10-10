@@ -17,8 +17,20 @@ import {
   type QueueEventAdapter,
 } from "../features/queue/useQueueEvents";
 import OutputSettings from "../features/settings/OutputSettings";
-import { useConversionSettings } from "../features/settings/useConversionSettings";
-import { LumaFlowError, selectOutputFolder as selectOutputFolderCommand } from "../shared/tauri";
+import {
+  clearOutputDirectoryPreference,
+  readOutputPreferences,
+  writeOutputPreferences,
+} from "../features/settings/outputPreferences";
+import {
+  defaultConversionSettings,
+  useConversionSettings,
+} from "../features/settings/useConversionSettings";
+import {
+  LumaFlowError,
+  selectOutputFolder as selectOutputFolderCommand,
+  validateOutputFolder,
+} from "../shared/tauri";
 import GlassPanel from "../ui/GlassPanel";
 import StatusBadge from "../ui/StatusBadge";
 import type { QueueSnapshot } from "../domain/job";
@@ -35,6 +47,7 @@ export type AppShellProps = {
   intakeAdapter?: Partial<FileIntakeAdapter>;
   queueCommands?: Partial<QueueCommandAdapter>;
   queueEventAdapter?: QueueEventAdapter;
+  preferencesStorage?: Storage | null;
   selectOutputFolder?: () => Promise<string | null>;
 };
 
@@ -43,10 +56,13 @@ export const AppShell: FC<AppShellProps> = ({
   intakeAdapter: providedIntakeAdapter,
   queueCommands,
   queueEventAdapter,
+  preferencesStorage,
   selectOutputFolder = selectOutputFolderCommand,
 }) => {
   const [themeMode, setThemeMode] = useState<ThemeMode>("auto");
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [savedPreferences] = useState(() => readOutputPreferences(preferencesStorage));
   const queue = useQueueEvents({
     commands: queueCommands,
     eventAdapter: queueEventAdapter,
@@ -60,7 +76,56 @@ export const AppShell: FC<AppShellProps> = ({
     [providedIntakeAdapter, queue.controller],
   );
   const intake = useFileIntake({ adapter: intakeAdapter });
-  const conversion = useConversionSettings();
+  const conversion = useConversionSettings({
+    format: savedPreferences?.format ?? defaultConversionSettings.format,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydratePreferences = async (): Promise<void> => {
+      if (!savedPreferences?.outputDirectory) {
+        if (!cancelled) {
+          setPreferencesReady(true);
+        }
+        return;
+      }
+
+      try {
+        const normalizedDirectory = await validateOutputFolder(savedPreferences.outputDirectory);
+        if (!cancelled) {
+          conversion.setSettings({ outputDirectory: normalizedDirectory });
+        }
+      } catch {
+        if (!cancelled) {
+          clearOutputDirectoryPreference(preferencesStorage);
+        }
+      } finally {
+        if (!cancelled) {
+          setPreferencesReady(true);
+        }
+      }
+    };
+
+    void hydratePreferences();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversion.setSettings, preferencesStorage, savedPreferences]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+
+    writeOutputPreferences(
+      {
+        outputDirectory: conversion.settings.outputDirectory,
+        format: conversion.settings.format,
+      },
+      preferencesStorage,
+    );
+  }, [conversion.settings.format, conversion.settings.outputDirectory, preferencesReady, preferencesStorage]);
 
   useEffect(() => {
     applyTheme(themeMode);
@@ -84,11 +149,25 @@ export const AppShell: FC<AppShellProps> = ({
 
   const handleStartConversion = useCallback(async () => {
     setSettingsError(null);
-    const result = await intake.start(conversion.outputSettings);
+    let normalizedOutputDirectory: string;
+    try {
+      normalizedOutputDirectory = await validateOutputFolder(conversion.outputSettings.outputDirectory);
+    } catch {
+      conversion.setSettings({ outputDirectory: "" });
+      clearOutputDirectoryPreference(preferencesStorage);
+      setSettingsError("The output folder is no longer available. Choose a new destination folder.");
+      return;
+    }
+
+    conversion.setSettings({ outputDirectory: normalizedOutputDirectory });
+    const result = await intake.start({
+      ...conversion.outputSettings,
+      outputDirectory: normalizedOutputDirectory,
+    });
     if (result?.failed.length) {
       setSettingsError("Some files could not be queued. Review the inline errors below.");
     }
-  }, [conversion.outputSettings, intake.start]);
+  }, [conversion.outputSettings, conversion.setSettings, intake.start, preferencesStorage]);
 
   const readySourceCount = intake.sources.filter((source) => source.status === "ready").length;
 
@@ -194,7 +273,11 @@ export const AppShell: FC<AppShellProps> = ({
                 <button
                   className="button button--primary"
                   type="button"
-                  disabled={!intake.canStart || conversion.settings.outputDirectory.length === 0}
+                  disabled={
+                    !preferencesReady ||
+                    !intake.canStart ||
+                    conversion.settings.outputDirectory.length === 0
+                  }
                   onClick={() => void handleStartConversion()}
                 >
                   Start conversion

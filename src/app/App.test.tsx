@@ -1,9 +1,66 @@
 // @vitest-environment jsdom
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { handleSkipLinkActivation } from "./AppShell";
+import AppShell, { handleSkipLinkActivation } from "./AppShell";
+import {
+  preferencesStorageKey,
+  readOutputPreferences,
+} from "../features/settings/outputPreferences";
+
+const validateOutputFolderMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../shared/tauri", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/tauri")>();
+  return { ...actual, validateOutputFolder: validateOutputFolderMock };
+});
+
+const testAppShellProps = {
+  intakeAdapter: {
+    registerFileDropHandler: async () => () => undefined,
+  },
+  queueEventAdapter: {
+    listen: async () => () => undefined,
+  },
+};
+
+function createStorage(): Storage {
+  const values = new Map<string, string>();
+
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    key(index) {
+      return Array.from(values.keys())[index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+  };
+}
+
+let storage: Storage;
+
+beforeEach(() => {
+  storage = createStorage();
+  validateOutputFolderMock.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("App", () => {
   it("renders a root landmark with an accessible heading", () => {
@@ -73,5 +130,43 @@ describe("App", () => {
 
     expect(defaultPrevented).toBe(true);
     expect(focused).toBe(true);
+  });
+
+  it("clears an unavailable saved folder while retaining the saved format", async () => {
+    storage.setItem(
+      preferencesStorageKey,
+      JSON.stringify({ outputDirectory: "/removed", format: "mp3" }),
+    );
+    validateOutputFolderMock.mockRejectedValue({
+      code: "output_directory_not_found",
+      message: "The output folder does not exist",
+    });
+
+    render(<AppShell {...testAppShellProps} preferencesStorage={storage} />);
+
+    await waitFor(() => expect(validateOutputFolderMock).toHaveBeenCalledWith("/removed"));
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("");
+      expect((screen.getByLabelText("Format") as HTMLSelectElement).value).toBe("mp3");
+      expect((screen.getByRole("button", { name: "Start conversion" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    expect(readOutputPreferences(storage)).toEqual({ outputDirectory: "", format: "mp3" });
+  });
+
+  it("hydrates a valid saved folder without changing its saved format", async () => {
+    storage.setItem(
+      preferencesStorageKey,
+      JSON.stringify({ outputDirectory: "/saved", format: "mp3" }),
+    );
+    validateOutputFolderMock.mockResolvedValue("/exports");
+
+    render(<AppShell {...testAppShellProps} preferencesStorage={storage} />);
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Choose a destination folder") as HTMLInputElement).value).toBe("/exports");
+      expect((screen.getByLabelText("Format") as HTMLSelectElement).value).toBe("mp3");
+    });
+    expect(validateOutputFolderMock).toHaveBeenCalledWith("/saved");
   });
 });
