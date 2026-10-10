@@ -382,6 +382,10 @@ mod tests {
             .expect_err("MKV must not drop subtitles when transcoding is requested");
 
         assert_eq!(error.code, "unsupported_conversion");
+        assert_eq!(
+            error.message,
+            "MKV transcoding with subtitle streams is not supported safely"
+        );
     }
 
     #[test]
@@ -417,6 +421,9 @@ mod tests {
             .expect_err("HEVC MP4 is not proven compatible by the MVP matrix");
 
         assert_eq!(error.code, "unsupported_conversion");
+        assert!(error.message.contains("not proven safe"));
+        assert!(error.message.contains("compatible codecs"));
+        assert!(error.message.contains("Always transcode"));
     }
 
     #[test]
@@ -648,6 +655,9 @@ mod tests {
             .expect_err("MKV remux must require known-safe codecs");
 
         assert_eq!(error.code, "unsupported_conversion");
+        assert!(error.message.contains("not proven safe"));
+        assert!(error.message.contains("compatible codecs"));
+        assert!(error.message.contains("Always transcode"));
     }
 
     #[test]
@@ -769,7 +779,7 @@ pub fn plan_conversion(
             return Err(MediaError::new(
                 "unsupported_conversion",
                 format!(
-                    "The requested {} conversion is not proven compatible",
+                    "The requested {} conversion is not proven safe for the selected streams. Choose compatible codecs in Advanced settings or use Always transcode when supported.",
                     output_format.display_name()
                 ),
             ));
