@@ -8,3 +8,8 @@ src-tauri/gen/
 tests/fixtures/manifest.json
 tests/fixtures/sample.*
 .DS_Store
+
+############################
+# CodeGraph index
+############################
+.codegraph/
