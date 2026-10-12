@@ -45,6 +45,13 @@ function stableSourceNotice(manifest: ReleaseAssetManifest): string {
   }
   lines.push(
     "",
+    "## Fonts",
+    "",
+    "LumaFlow bundles the Geist variable sans font (Copyright (c) 2023 Vercel, in collaboration with basement.studio), licensed under the SIL Open Font License, Version 1.1. The font file and its license text are committed under `src/styles/fonts/`.",
+    "",
+    "- `src/styles/fonts/Geist-Variable.woff2` — Geist Variable, SIL OFL 1.1",
+    "- `src/styles/fonts/LICENSE.txt` — SIL Open Font License, Version 1.1",
+    "",
     "## License handling",
     "",
     "Release builds include the upstream license and notice files extracted from the exact verified archive under the packaged resource directory. The release workflow also records the exact `-version`, build configuration, enabled external libraries, and checksums of the two executables in a target-specific generated notice. A missing, stale, or mismatched notice fails the release gate.",

@@ -13,6 +13,13 @@ FFmpeg is licensed under GPL-3.0-or-later for the selected builds. FFprobe is di
 | windows-x64 | 8.1.2 | GyanD codexffmpeg full build | b8cdefab5f50590a076c27c2b56b0294a0e6154faded28ba1ba05ebc4f801f57 | https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build.zip |
 | linux-x64 | 8.1.2 | ffmpeg-bins2 / zackees | 150f20cfa659754115b74c2aa32f0e1aa150d08a14191156875c8efeb5713b29 | https://github.com/zackees/ffmpeg-bins2/releases/download/v8.1.2/linux_x64.zip |
 
+## Fonts
+
+LumaFlow bundles the Geist variable sans font (Copyright (c) 2023 Vercel, in collaboration with basement.studio), licensed under the SIL Open Font License, Version 1.1. The font file and its license text are committed under `src/styles/fonts/`.
+
+- `src/styles/fonts/Geist-Variable.woff2` — Geist Variable, SIL OFL 1.1
+- `src/styles/fonts/LICENSE.txt` — SIL Open Font License, Version 1.1
+
 ## License handling
 
 Release builds include the upstream license and notice files extracted from the exact verified archive under the packaged resource directory. The release workflow also records the exact `-version`, build configuration, enabled external libraries, and checksums of the two executables in a target-specific generated notice. A missing, stale, or mismatched notice fails the release gate.
