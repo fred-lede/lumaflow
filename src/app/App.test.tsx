@@ -596,14 +596,44 @@ describe("App", () => {
     expect(queuePanel?.closest(".workspace-source-column")).toBeNull();
   });
 
-  it("renders no card step numbers and keeps the queue count semantically separate", () => {
+  it("renders no card step numbers and hides the queue count when the queue is empty", () => {
     const root = document.createElement("div");
     root.innerHTML = renderToStaticMarkup(<App />);
 
     expect(root.querySelector(".card-step")).toBeNull();
     expect(root.querySelector(".brand-name")?.textContent).toBe("LumaFlow");
     expect(root.querySelectorAll(".workspace-topbar .eyebrow")).toHaveLength(0);
-    expect(root.querySelector(".queue-count__value")).not.toBeNull();
+    expect(root.querySelector(".queue-count")).toBeNull();
+  });
+
+  it("shows the queue count when the queue has jobs", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(
+      <AppShell
+        {...testAppShellProps}
+        initialQueueSnapshot={{
+          revision: 1,
+          paused: false,
+          jobs: [
+            {
+              id: "j1",
+              sourcePath: "/a.mp4",
+              media: mediaInfo("/a.mp4"),
+              outputSettings: defaultSettingsForTest,
+              processingKind: null,
+              attempt: 1,
+              state: { kind: "queued", label: "Queued" },
+              progress: 0,
+              outputPath: null,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(root.querySelector(".queue-count__value")?.textContent).toBe("01");
+    expect(root.querySelector(".queue-count dt")?.textContent).toBe("Queue items");
+    expect(root.querySelector(".queue-panel")?.getAttribute("aria-label")).toBeNull();
   });
 
   it("keeps one page-level eyebrow and none inside cards", () => {

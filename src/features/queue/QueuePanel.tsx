@@ -154,10 +154,12 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
         <div>
           <h2 id="queue-title">Batch queue</h2>
         </div>
-        <dl className="queue-count">
-          <dt className="sr-only">Queue items</dt>
-          <dd className="queue-count__value">{jobs.length.toString().padStart(2, "0")}</dd>
-        </dl>
+        {jobs.length > 0 ? (
+          <dl className="queue-count">
+            <dt className="sr-only">Queue items</dt>
+            <dd className="queue-count__value">{jobs.length.toString().padStart(2, "0")}</dd>
+          </dl>
+        ) : null}
       </div>
       <p className="supporting-text queue-panel__intro">
         Monitor local conversions, recover failures, and adjust the display order with the keyboard.

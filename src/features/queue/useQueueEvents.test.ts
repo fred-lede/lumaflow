@@ -747,7 +747,7 @@ describe("queue actions and accessible rendering", () => {
     expect(markup).toContain("Pause all");
     expect(markup).toContain("Clear completed");
     expect(markup).toContain("Cancel active");
-    expect(markup).toContain("Queue items");
+    expect(markup).not.toContain("Queue items");
     expect(markup).not.toContain('aria-label="0 queue items"');
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain("No conversions in the queue yet.");
