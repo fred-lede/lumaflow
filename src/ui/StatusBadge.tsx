@@ -1,6 +1,6 @@
 import type { FC } from "react";
 
-export type StatusBadgeStatus = "attention" | "offline" | "ready" | "working";
+export type StatusBadgeStatus = "attention" | "neutral" | "ready" | "working";
 
 export type StatusBadgeProps = {
   label: string;
@@ -9,7 +9,7 @@ export type StatusBadgeProps = {
 
 const statusIcons: Record<StatusBadgeStatus, string> = {
   attention: "!",
-  offline: "×",
+  neutral: "•",
   ready: "✓",
   working: "↻",
 };

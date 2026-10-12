@@ -6,7 +6,7 @@ import { StatusBadge } from "./StatusBadge";
 
 describe("StatusBadge", () => {
   it("renders a visible status label and a decorative icon", () => {
-    const markup = renderToStaticMarkup(<StatusBadge status="offline" label="Offline" />);
+    const markup = renderToStaticMarkup(<StatusBadge status="neutral" label="Offline" />);
 
     expect(markup).toContain('role="status"');
     expect(markup).toContain('data-status-label="true"');
@@ -16,7 +16,7 @@ describe("StatusBadge", () => {
   });
 
   it("keeps passive statuses out of the tab order and focuses the theme control", () => {
-    const badgeMarkup = renderToStaticMarkup(<StatusBadge status="offline" label="Offline" />);
+    const badgeMarkup = renderToStaticMarkup(<StatusBadge status="neutral" label="Offline" />);
     const shellMarkup = renderToStaticMarkup(<AppShell />);
 
     expect(badgeMarkup).not.toContain("tabindex");

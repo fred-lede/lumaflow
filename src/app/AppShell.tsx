@@ -227,7 +227,7 @@ export const AppShell: FC<AppShellProps> = ({
           <p className="brand-name">LumaFlow</p>
         </div>
         <div className="topbar-actions">
-          <StatusBadge status="offline" label="Offline mode" />
+          <StatusBadge status="neutral" label="Local mode" />
           {progressSummary ? (
             <p className="topbar-progress">
               <span aria-hidden="true">↻</span>
@@ -337,7 +337,7 @@ export const AppShell: FC<AppShellProps> = ({
           aria-live="polite"
           aria-atomic="true"
         >
-          LumaFlow is ready. Files are processed locally in offline mode.
+          LumaFlow is ready. Files are processed locally.
         </div>
       </main>
     </div>

@@ -971,9 +971,9 @@ input::placeholder {
   line-height: 1;
 }
 
-.status-badge--offline .status-badge__icon {
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
+.status-badge--neutral .status-badge__icon {
+  background: var(--color-surface-solid);
+  color: var(--color-text-muted);
 }
 
 .status-badge--ready .status-badge__icon {

@@ -614,6 +614,16 @@ describe("App", () => {
     expect(root.querySelector(".workspace-intro .eyebrow")?.textContent).toBe("Workspace");
   });
 
+  it("shows a neutral local-mode chip instead of a danger offline badge", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(<App />);
+
+    const topbarBadge = root.querySelector(".workspace-topbar .status-badge");
+    expect(topbarBadge?.getAttribute("data-status")).toBe("neutral");
+    expect(topbarBadge?.textContent).toContain("Local mode");
+    expect(root.querySelector(".status-badge--offline")).toBeNull();
+  });
+
   it("shows a conversion counter only while a job is processing", () => {
     const idle = document.createElement("div");
     idle.innerHTML = renderToStaticMarkup(<App />);
