@@ -33,7 +33,7 @@ import {
   validateOutputFolder,
 } from "../shared/tauri";
 import GlassPanel from "../ui/GlassPanel";
-import StatusBadge from "../ui/StatusBadge";
+import StatusBadge, { type StatusBadgeStatus } from "../ui/StatusBadge";
 import type { QueueSnapshot } from "../domain/job";
 
 export function handleSkipLinkActivation(
@@ -215,6 +215,13 @@ export const AppShell: FC<AppShellProps> = ({
     .filter((job): job is NonNullable<typeof job> => job !== undefined);
   const progressSummary = queueProgressSummary(queueJobs, { paused: queue.state.paused });
 
+  const topbarStatus: { status: StatusBadgeStatus; label: string } =
+    queue.state.paused && queueJobs.length > 0
+      ? { status: "neutral", label: "Paused" }
+      : progressSummary
+        ? { status: "working", label: progressSummary }
+        : { status: "ready", label: "Ready" };
+
   const readySourceCount = intake.sources.filter((source) => source.status === "ready").length;
 
   return (
@@ -223,17 +230,14 @@ export const AppShell: FC<AppShellProps> = ({
         Skip to main content
       </a>
       <header className="workspace-topbar">
-        <div>
-          <p className="brand-name">LumaFlow</p>
+        <div className="topbar-identity">
+          <h1 id="app-title" className="brand-name">
+            LumaFlow
+          </h1>
+          <p className="topbar-subtitle">Batch media conversion, processed locally</p>
         </div>
         <div className="topbar-actions">
-          <StatusBadge status="neutral" label="Local mode" />
-          {progressSummary ? (
-            <p className="topbar-progress">
-              <span aria-hidden="true">↻</span>
-              <span>{progressSummary}</span>
-            </p>
-          ) : null}
+          <StatusBadge status={topbarStatus.status} label={topbarStatus.label} />
           <button
             className="theme-toggle"
             type="button"
@@ -241,7 +245,6 @@ export const AppShell: FC<AppShellProps> = ({
             aria-label={`Change theme, currently ${themeModeLabels[themeMode]}`}
           >
             <span aria-hidden="true">◐</span>
-            <span>Theme: {themeModeLabels[themeMode]}</span>
           </button>
         </div>
       </header>
@@ -252,19 +255,6 @@ export const AppShell: FC<AppShellProps> = ({
         aria-labelledby="app-title"
         tabIndex={-1}
       >
-        <div className="workspace-intro">
-          <div>
-            <p className="eyebrow">Workspace</p>
-            <h1 id="app-title" className="workspace-title">
-              Convert your media
-            </h1>
-            <p className="supporting-text">
-              Add files, choose an output, and review the queue before processing locally.
-            </p>
-          </div>
-          <StatusBadge status="ready" label="Ready for files" />
-        </div>
-
         <div className="workspace-layout">
           <div className="workspace-source-column">
             <GlassPanel className="workspace-card workspace-source-card" labelledBy="sources-title" role="region">

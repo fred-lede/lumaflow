@@ -103,24 +103,22 @@ describe("App", () => {
     const heading = root.querySelector("h1#app-title");
     const main = root.querySelector("main#main-content");
     const skipLink = root.querySelector("a.skip-link");
-    const introSupportingText = root.querySelector(".workspace-intro .supporting-text");
+    const topbarSubtitle = root.querySelector(".workspace-topbar .topbar-subtitle");
     const layouts = root.querySelectorAll(".workspace-layout");
     const sourceColumn = root.querySelector(".workspace-source-column");
     const queuePanel = root.querySelector(".queue-panel");
     const settingsColumn = root.querySelector(".workspace-settings-column");
 
     expect(heading?.getAttribute("id")).toBe("app-title");
-    expect(heading?.classList.contains("workspace-title")).toBe(true);
-    expect(heading?.textContent).toBe("Convert your media");
+    expect(heading?.classList.contains("brand-name")).toBe(true);
+    expect(heading?.textContent).toBe("LumaFlow");
     expect(main?.classList.contains("workspace-main")).toBe(true);
     expect(main?.getAttribute("aria-labelledby")).toBe("app-title");
     expect(main?.getAttribute("tabindex")).toBe("-1");
     expect(skipLink?.classList.contains("skip-link")).toBe(true);
     expect(skipLink?.getAttribute("href")).toBe("#main-content");
     expect(skipLink?.textContent).toBe("Skip to main content");
-    expect(introSupportingText?.textContent).toBe(
-      "Add files, choose an output, and review the queue before processing locally.",
-    );
+    expect(topbarSubtitle?.textContent).toBe("Batch media conversion, processed locally");
     expect(root.querySelector('[role="note"]')).toBeNull();
     expect(layouts).toHaveLength(1);
     expect(sourceColumn?.classList.contains("workspace-source-column")).toBe(true);
@@ -636,29 +634,25 @@ describe("App", () => {
     expect(root.querySelector(".queue-panel")?.getAttribute("aria-label")).toBeNull();
   });
 
-  it("keeps one page-level eyebrow and none inside cards", () => {
+  it("retires the eyebrow system entirely", () => {
     const root = document.createElement("div");
     root.innerHTML = renderToStaticMarkup(<App />);
 
-    expect(root.querySelectorAll(".eyebrow")).toHaveLength(1);
-    expect(root.querySelector(".workspace-intro .eyebrow")?.textContent).toBe("Workspace");
+    expect(root.querySelectorAll(".eyebrow")).toHaveLength(0);
   });
 
-  it("shows a neutral local-mode chip instead of a danger offline badge", () => {
+  it("shows a ready status chip when idle", () => {
     const root = document.createElement("div");
     root.innerHTML = renderToStaticMarkup(<App />);
 
     const topbarBadge = root.querySelector(".workspace-topbar .status-badge");
-    expect(topbarBadge?.getAttribute("data-status")).toBe("neutral");
-    expect(topbarBadge?.textContent).toContain("Local mode");
+    expect(topbarBadge?.getAttribute("data-status")).toBe("ready");
+    expect(topbarBadge?.textContent).toContain("Ready");
     expect(root.querySelector(".status-badge--offline")).toBeNull();
+    expect(root.querySelector(".topbar-progress")).toBeNull();
   });
 
-  it("shows a conversion counter only while a job is processing", () => {
-    const idle = document.createElement("div");
-    idle.innerHTML = renderToStaticMarkup(<App />);
-    expect(idle.querySelector(".topbar-progress")).toBeNull();
-
+  it("swaps the status chip tone with queue activity", () => {
     const busy = document.createElement("div");
     busy.innerHTML = renderToStaticMarkup(
       <AppShell
@@ -682,7 +676,64 @@ describe("App", () => {
         }}
       />,
     );
-    expect(busy.querySelector(".topbar-progress")?.textContent).toContain("Converting 1/1");
+
+    const chip = busy.querySelector(".workspace-topbar .status-badge");
+    expect(chip?.getAttribute("data-status")).toBe("working");
+    expect(chip?.textContent).toContain("Converting 1/1");
+    expect(busy.querySelector(".topbar-progress")).toBeNull();
+  });
+
+  it("shows a paused chip when the queue is paused with jobs", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(
+      <AppShell
+        {...testAppShellProps}
+        initialQueueSnapshot={{
+          revision: 1,
+          paused: true,
+          jobs: [
+            {
+              id: "j1",
+              sourcePath: "/a.mp4",
+              media: mediaInfo("/a.mp4"),
+              outputSettings: defaultSettingsForTest,
+              processingKind: null,
+              attempt: 1,
+              state: { kind: "queued", label: "Queued" },
+              progress: 0,
+              outputPath: null,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const chip = root.querySelector(".workspace-topbar .status-badge");
+    expect(chip?.getAttribute("data-status")).toBe("neutral");
+    expect(chip?.textContent).toContain("Paused");
+  });
+
+  it("shows a ready chip when paused with an empty queue", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(
+      <AppShell
+        {...testAppShellProps}
+        initialQueueSnapshot={{ revision: 1, paused: true, jobs: [] }}
+      />,
+    );
+
+    const chip = root.querySelector(".workspace-topbar .status-badge");
+    expect(chip?.getAttribute("data-status")).toBe("ready");
+    expect(chip?.textContent).toContain("Ready");
+  });
+
+  it("keeps the theme button icon-only with its accessible label", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(<App />);
+
+    const themeButton = root.querySelector(".workspace-topbar .theme-toggle");
+    expect(themeButton?.textContent).toBe("◐");
+    expect(themeButton?.getAttribute("aria-label")).toBe("Change theme, currently Auto");
   });
 
   it("satisfies every layout selector the CSS relies on against the rendered markup", () => {
