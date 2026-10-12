@@ -270,7 +270,6 @@ export const AppShell: FC<AppShellProps> = ({
             <GlassPanel className="workspace-card workspace-source-card" labelledBy="sources-title" role="region">
               <div className="card-heading">
                 <div>
-                  <p className="eyebrow">Source media</p>
                   <h2 id="sources-title">Files</h2>
                 </div>
               </div>
@@ -290,7 +289,6 @@ export const AppShell: FC<AppShellProps> = ({
             >
               <div className="card-heading">
                 <div>
-                  <p className="eyebrow">Configuration</p>
                   <h2 id="settings-title">Output settings</h2>
                 </div>
               </div>

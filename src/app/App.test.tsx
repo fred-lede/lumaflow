@@ -606,6 +606,14 @@ describe("App", () => {
     expect(root.querySelector(".queue-count__value")).not.toBeNull();
   });
 
+  it("keeps one page-level eyebrow and none inside cards", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderToStaticMarkup(<App />);
+
+    expect(root.querySelectorAll(".eyebrow")).toHaveLength(1);
+    expect(root.querySelector(".workspace-intro .eyebrow")?.textContent).toBe("Workspace");
+  });
+
   it("shows a conversion counter only while a job is processing", () => {
     const idle = document.createElement("div");
     idle.innerHTML = renderToStaticMarkup(<App />);

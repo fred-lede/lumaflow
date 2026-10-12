@@ -152,7 +152,6 @@ export const QueuePanel: FC<QueuePanelProps> = ({ controller: providedController
     <GlassPanel className="queue-panel" labelledBy="queue-title" role="region">
       <div className="card-heading">
         <div>
-          <p className="eyebrow">Processing workspace</p>
           <h2 id="queue-title">Batch queue</h2>
         </div>
         <dl className="queue-count">
