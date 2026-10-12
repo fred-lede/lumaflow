@@ -72,7 +72,6 @@ main:focus-visible {
 }
 
 .topbar-actions,
-.workspace-intro,
 .card-heading {
   display: flex;
   align-items: center;
@@ -81,7 +80,6 @@ main:focus-visible {
 }
 
 .brand-name,
-.eyebrow,
 h1,
 h2,
 p {
@@ -94,13 +92,10 @@ p {
   letter-spacing: -0.02em;
 }
 
-.eyebrow {
-  color: var(--color-text-subtle);
+.topbar-subtitle {
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
   font-size: var(--font-size-supporting);
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.08em;
-  line-height: 1.3;
-  text-transform: uppercase;
 }
 
 .supporting-text {
@@ -112,9 +107,9 @@ p {
 .theme-toggle {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: center;
   min-height: 2.75rem;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2);
   border: var(--border-width) solid var(--color-border-strong);
   border-radius: var(--radius-pill);
   background: var(--color-surface-raised);
@@ -134,51 +129,12 @@ p {
   background: var(--color-accent-soft);
 }
 
-.topbar-progress {
-  font-variant-numeric: tabular-nums;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 2.5rem;
-  padding: var(--space-2) var(--space-3);
-  border: var(--border-width) solid var(--color-border-strong);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-raised);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-supporting);
-  font-weight: var(--font-weight-bold);
-  white-space: nowrap;
-  transition: background-color var(--motion-base) var(--ease-standard),
-    border-color var(--motion-base) var(--ease-standard),
-    color var(--motion-base) var(--ease-standard);
-}
-
 .workspace-main {
   width: calc(100% - 2rem);
   max-width: 90rem;
   margin: 0 auto;
   min-height: calc(100dvh - 4.75rem);
   padding: clamp(var(--space-5), 4vh, var(--space-10)) 0;
-}
-
-.workspace-intro {
-  align-items: flex-end;
-  margin-bottom: var(--space-8);
-}
-
-.workspace-title {
-  max-width: 42rem;
-  margin-top: var(--space-2);
-  font-size: var(--font-size-heading);
-  font-weight: var(--font-weight-bold);
-  line-height: var(--line-height-tight);
-  letter-spacing: -0.04em;
-}
-
-.workspace-intro .supporting-text {
-  max-width: 42rem;
-  margin-top: var(--space-4);
-  font-size: var(--font-size-body);
 }
 
 .workspace-layout {
@@ -1032,8 +988,7 @@ input::placeholder {
 }
 
 @media (max-width: 720px) {
-  .workspace-topbar,
-  .workspace-intro {
+  .workspace-topbar {
     align-items: flex-start;
     flex-direction: column;
   }
