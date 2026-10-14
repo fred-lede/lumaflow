@@ -34,6 +34,8 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Install frontend dependencies
         run: npm ci
@@ -43,6 +45,15 @@ jobs:
 
       - name: Test frontend
         run: npm run test -- --run
+
+      - name: Check Rust formatting
+        # Blocking: rustfmt owns the Rust layout, so a formatting drift fails
+        # the build instead of landing in a review diff.
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+
+      - name: Lint Rust backend
+        # Blocking: `-D warnings` means a new clippy warning fails the build.
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Test Rust backend
         # The real-media integration target is asset-gated and runs in the
@@ -122,6 +133,117 @@ jobs:
               echo ""
               echo "This job is advisory. Do not set it as a required check while it is advisory."
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  rust-test-soak:
+    name: Rust test soak (advisory)
+    # The lib suite was flaky twice (ETXTBSY on freshly written fixture
+    # executables, and a scheduler counting race). Those races only show up
+    # under repeated runs and high --test-threads, which the single blocking
+    # `Test Rust backend` run does not exercise. This job hammers the same
+    # suite so a regression reports here instead of blocking a merge.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            unzip
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Soak the Rust lib suite across thread counts
+        id: rust_soak
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Build once, then run the compiled test binary directly: going
+          # through `cargo test` for every iteration spends the budget on cargo
+          # freshness checks instead of on test runs.
+          binary="$(cargo test --manifest-path src-tauri/Cargo.toml --lib \
+            --no-run --message-format=json 2>/dev/null |
+            python3 -c '
+          import json, sys
+          found = ""
+          for line in sys.stdin:
+              try:
+                  message = json.loads(line)
+              except ValueError:
+                  continue
+              if message.get("reason") == "compiler-artifact" and \
+                     message.get("profile", {}).get("test") and message.get("executable"):
+                  found = message["executable"]
+          print(found)
+          ' |
+            tail --lines=1)"
+          if [ -z "$binary" ]; then
+            echo "::error::could not locate the compiled lib test artifact"
+            exit 1
+          fi
+          case "$binary" in
+            /*) ;;
+            *) binary="$PWD/$binary" ;;
+          esac
+          echo "soak artifact: $binary"
+          # Run from the crate directory, the working directory cargo itself
+          # uses when it runs the test binary.
+          cd src-tauri
+          runs=0
+          failures=0
+          truncated=0
+          # A wall-clock budget inside the step: a hung run should fail this
+          # step, which `continue-on-error` masks, rather than be cancelled by
+          # the job timeout, which it does not.
+          deadline=$((SECONDS + 600))
+          for threads in 1 16 64 128; do
+            for iteration in $(seq 1 50); do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                truncated=1
+                echo "::error::soak budget exhausted after ${runs} runs (threads=${threads})"
+                break 2
+              fi
+              runs=$((runs + 1))
+              if ! "$binary" --test-threads="$threads" >/tmp/soak.log 2>&1; then
+                failures=$((failures + 1))
+                echo "::error::soak run failed (threads=${threads}, iteration=${iteration})"
+                tail --lines=40 /tmp/soak.log
+              fi
+            done
+          done
+          echo "runs=${runs}" >>"$GITHUB_OUTPUT"
+          echo "failures=${failures}" >>"$GITHUB_OUTPUT"
+          echo "truncated=${truncated}" >>"$GITHUB_OUTPUT"
+          if [ "$failures" -ne 0 ] || [ "$truncated" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Report soak result
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Rust test soak (advisory)"
+            echo ""
+            echo "- runs: \`${{ steps.rust_soak.outputs.runs }}\` across thread counts 1, 16, 64, 128"
+            echo "- failures: \`${{ steps.rust_soak.outputs.failures }}\`"
+            echo "- budget exhausted early: \`${{ steps.rust_soak.outputs.truncated }}\`"
+            echo "- outcome: \`${{ steps.rust_soak.outcome }}\`"
+            echo ""
+            echo "This job is advisory. Do not set it as a required check while it is advisory."
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.rust_soak.outcome }}" != "success" ]; then
+            echo "::warning::Rust test soak failed; merge is not blocked by this job"
           fi
 
   release:

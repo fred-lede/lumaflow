@@ -44,7 +44,9 @@ impl BackendState {
     fn with_tools(tools: ToolLocator) -> Self {
         let probe_tools = tools.clone();
         Self {
-            scheduler: Scheduler::with_default_concurrency(Arc::new(FfmpegRunner::with_tools(tools.clone()))),
+            scheduler: Scheduler::with_default_concurrency(Arc::new(FfmpegRunner::with_tools(
+                tools.clone(),
+            ))),
             selected_paths: Mutex::new(HashSet::new()),
             pending_dropped_paths: Mutex::new(Vec::new()),
             selected_output_directories: Mutex::new(HashSet::new()),
@@ -401,15 +403,11 @@ pub fn reorder_jobs(
 }
 
 #[tauri::command]
-pub fn clear_completed(
-    state: State<'_, BackendState>,
-) -> Result<QueueSnapshot, CommandError> {
+pub fn clear_completed(state: State<'_, BackendState>) -> Result<QueueSnapshot, CommandError> {
     clear_completed_inner(&state)
 }
 
-pub(crate) fn clear_completed_inner(
-    state: &BackendState,
-) -> Result<QueueSnapshot, CommandError> {
+pub(crate) fn clear_completed_inner(state: &BackendState) -> Result<QueueSnapshot, CommandError> {
     let _command_lock = state
         .command_lock
         .lock()
@@ -572,9 +570,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::domain::job::EnqueueJobRequest;
-    use crate::domain::media::{AudioStreamInfo, MediaInfo, OutputFormat, OutputSettings, QualityPreset};
+    use crate::domain::media::{
+        AudioStreamInfo, MediaInfo, OutputFormat, OutputSettings, QualityPreset,
+    };
     use crate::jobs::{
-        CancellationToken, EventSink, ExecutionOutcome, JobExecutor, JobExecution, Scheduler,
+        CancellationToken, EventSink, ExecutionOutcome, JobExecution, JobExecutor, Scheduler,
         SchedulerError,
     };
 
@@ -591,10 +591,8 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!(
-            "lumaflow-command-test-{}-{sequence}",
-            unique
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("lumaflow-command-test-{}-{sequence}", unique));
         fs::create_dir_all(&directory).expect("test directory should be created");
         let file = directory.join("clip.wav");
         fs::write(&file, b"fixture").expect("test file should be written");
@@ -702,12 +700,18 @@ mod tests {
             (SchedulerError::JobNotFound, "job_not_found"),
             (SchedulerError::InvalidState, "invalid_state"),
             (SchedulerError::InvalidConcurrency, "invalid_concurrency"),
-            (SchedulerError::CancellationRejected, "cancellation_rejected"),
+            (
+                SchedulerError::CancellationRejected,
+                "cancellation_rejected",
+            ),
             (SchedulerError::InvalidOrder, "invalid_order"),
         ];
 
         for (scheduler_error, expected_code) in cases {
-            assert_eq!(command_error_from_scheduler(scheduler_error).code, expected_code);
+            assert_eq!(
+                command_error_from_scheduler(scheduler_error).code,
+                expected_code
+            );
         }
     }
 
@@ -719,7 +723,11 @@ mod tests {
 
         let error = enqueue_jobs_inner(
             &state,
-            vec![request(&source, output_directory, media_info(&source, "clip.wav"))],
+            vec![request(
+                &source,
+                output_directory,
+                media_info(&source, "clip.wav"),
+            )],
         )
         .expect_err("renderer-only paths must not be accepted");
 
@@ -786,11 +794,16 @@ mod tests {
         let output_directory = source.parent().expect("source should have a parent");
         let probed = media_info(&source, "clip.wav");
         let state = BackendState::with_probe(Arc::new(move |_| Ok(probed.clone())));
-        state.remember_selected_path(fs::canonicalize(&source).expect("source should canonicalize"));
+        state
+            .remember_selected_path(fs::canonicalize(&source).expect("source should canonicalize"));
 
         let error = enqueue_jobs_inner(
             &state,
-            vec![request(&source, output_directory, media_info(&source, "clip.wav"))],
+            vec![request(
+                &source,
+                output_directory,
+                media_info(&source, "clip.wav"),
+            )],
         )
         .expect_err("unregistered output directories must be rejected");
 
@@ -832,7 +845,11 @@ mod tests {
         let probed = media_info(&source, "clip.wav");
         let state = authorized_state(&source, output_directory, probed.clone());
         let valid = request(&source, output_directory, probed);
-        let invalid = request(&second_source, output_directory, media_info(&second_source, "second.wav"));
+        let invalid = request(
+            &second_source,
+            output_directory,
+            media_info(&second_source, "second.wav"),
+        );
 
         let error = enqueue_jobs_inner(&state, vec![valid, invalid])
             .expect_err("one invalid request should abort the batch");
@@ -869,22 +886,25 @@ mod tests {
             Scheduler::new(Arc::new(ImmediateExecutor), 1),
             Arc::new(move |_| Ok(probed.clone())),
         );
-        state.remember_selected_path(fs::canonicalize(&source).expect("source should canonicalize"));
+        state
+            .remember_selected_path(fs::canonicalize(&source).expect("source should canonicalize"));
         state.remember_output_directory(
             fs::canonicalize(output_directory).expect("output directory should canonicalize"),
         );
 
         let snapshot = enqueue_jobs_inner(
             &state,
-            vec![request(&source, output_directory, media_info(&source, "forged.wav"))],
+            vec![request(
+                &source,
+                output_directory,
+                media_info(&source, "forged.wav"),
+            )],
         )
         .expect("authorized destination should enqueue");
         let job = &snapshot.jobs[0];
-        assert!(
-            state
-                .scheduler
-                .wait_for_idle(std::time::Duration::from_secs(1))
-        );
+        assert!(state
+            .scheduler
+            .wait_for_idle(std::time::Duration::from_secs(1)));
         let output_path = fs::canonicalize(output_directory)
             .expect("output directory should canonicalize")
             .join("clip.flac");
@@ -903,14 +923,19 @@ mod tests {
             Scheduler::new(Arc::new(ImmediateExecutor), 1),
             Arc::new(move |_| Ok(probed.clone())),
         );
-        state.remember_selected_path(fs::canonicalize(&source).expect("source should canonicalize"));
+        state
+            .remember_selected_path(fs::canonicalize(&source).expect("source should canonicalize"));
         state.remember_output_directory(
             fs::canonicalize(output_directory).expect("output directory should canonicalize"),
         );
 
         let snapshot = enqueue_jobs_inner(
             &state,
-            vec![request(&source, output_directory, media_info(&source, "forged.wav"))],
+            vec![request(
+                &source,
+                output_directory,
+                media_info(&source, "forged.wav"),
+            )],
         )
         .expect("job should enqueue");
         let job_id = snapshot.jobs[0].id.clone();

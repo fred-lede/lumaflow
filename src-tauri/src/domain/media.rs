@@ -56,7 +56,8 @@ impl SourceQualityAssessment {
             status: SourceQualityStatus::Unknown,
             summary: "Source quality could not be verified".to_owned(),
             evidence: vec![
-                "A lossless container does not prove that the original source was lossless".to_owned(),
+                "A lossless container does not prove that the original source was lossless"
+                    .to_owned(),
             ],
         }
     }
@@ -127,14 +128,19 @@ pub enum QualityPreset {
 mod tests {
     use serde_json::json;
 
-    use super::{MediaInfo, OutputFormat, OutputSettings, QualityPreset, SourceQualityAssessment, SourceQualityStatus};
+    use super::{
+        MediaInfo, OutputFormat, OutputSettings, QualityPreset, SourceQualityAssessment,
+        SourceQualityStatus,
+    };
 
     #[test]
     fn serializes_source_quality_assessment_with_explicit_uncertainty() {
         let assessment = SourceQualityAssessment {
             status: SourceQualityStatus::PossiblyTranscodedLossy,
             summary: "Possibly transcoded from a lossy source".to_owned(),
-            evidence: vec!["The spectral profile shows a suspicious high-frequency cutoff".to_owned()],
+            evidence: vec![
+                "The spectral profile shows a suspicious high-frequency cutoff".to_owned(),
+            ],
         };
 
         assert_eq!(

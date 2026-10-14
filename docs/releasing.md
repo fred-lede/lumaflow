@@ -27,6 +27,8 @@ Install dependencies and run the source-level gates:
 npm ci
 npm run typecheck
 npm run test -- --run
+cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only
 ```
@@ -145,3 +147,35 @@ real-media run is handled with fix-or-file discipline: fix the underlying
 failure, or open an issue that records why it stays red. If the red light comes
 from an assertion that is too narrow rather than a real defect, widening the
 assertion requires a written rationale in the commit message.
+
+## Rust formatting and clippy gates
+
+`cargo fmt --manifest-path src-tauri/Cargo.toml --all --check` and
+`cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+run inside the blocking `check` job. They are deterministic — the same tree
+always produces the same result — so they gate merges directly instead of
+starting out advisory the way the real-media layer did.
+
+A formatting failure is resolved by running `cargo fmt --all` and committing the
+reformat separately from any semantic change. A new clippy warning is fixed in
+the code; suppressing one in place requires a written rationale in the commit
+message.
+
+## Rust test soak advisory policy
+
+The `rust-test-soak` job runs the Rust lib suite 200 times: it builds the test
+binary once and then runs it 50 times at each of `--test-threads` 1, 16, 64 and
+128, under a 10-minute wall-clock budget inside the step. It is advisory: a
+failure turns the job red, writes a workflow warning, and appends the run,
+failure and truncation counts to the step summary, but the workflow stays green
+and the merge is not blocked.
+
+While the job is advisory, never mark `Rust test soak (advisory)` as a required
+check, for the same reason as the real-media job: branch protection evaluates
+the job's own conclusion.
+
+This job has no promotion rule. Its purpose is to catch a timing race that a
+single run at the default thread count does not reproduce, so a red soak run is
+investigated as a signal rather than treated as a gate. A soak failure is
+handled with fix-or-file discipline: fix the underlying race, or open an issue
+that records why the soak stays red.

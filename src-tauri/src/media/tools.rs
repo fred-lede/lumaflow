@@ -69,9 +69,7 @@ impl ToolLocator {
 
         Err(ToolResolutionError {
             code: "bundled_tool_unconfigured",
-            message: format!(
-                "The bundled {tool} resource directory has not been configured"
-            ),
+            message: format!("The bundled {tool} resource directory has not been configured"),
         })
     }
 }

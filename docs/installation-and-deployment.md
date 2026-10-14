@@ -104,10 +104,30 @@ npm run dev
 
 ~~~sh
 npm run typecheck
-npm test
+npm test -- --run
 npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only
+~~~
+
+`npm test` 預設是 watch 模式、不會自己結束，所以要加 `-- --run`。`cargo fmt --check`
+與 `cargo clippy -- -D warnings` 與 CI 的 `check` job 相同，都是擋合併的閘門；格式問題用
+`cargo fmt --manifest-path src-tauri/Cargo.toml --all` 重排即可。
+
+CI 另有一個警報性質的 `rust-test-soak` job：它先把 Rust lib 測試編成一支測試 binary，再直接
+重跑 200 輪，依序用 `--test-threads` 1、16、64、128 各 50 輪，用來抓單次執行不會重現的競態。
+本地要重現：
+
+~~~sh
+cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
+binary="$PWD/src-tauri/target/debug/deps/$(ls -t src-tauri/target/debug/deps | grep '^lumaflow_lib-' | head -n1)"
+for threads in 1 16 64 128; do
+  for iteration in $(seq 1 50); do
+    (cd src-tauri && "$binary" --test-threads="$threads" >/dev/null) || echo "FAIL threads=$threads iteration=$iteration"
+  done
+done
 ~~~
 
 若要執行真實媒體 fixture 測試，請先依照 [tests/fixtures/README.md](../tests/fixtures/README.md) 設定受信任的 FFmpeg 與 FFprobe 路徑。

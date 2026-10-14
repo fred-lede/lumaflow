@@ -1,5 +1,5 @@
-use std::ffi::OsString;
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,9 +12,7 @@ use crate::domain::job::{JobError, JobEvent};
 use crate::media::tools::ToolLocator;
 
 use super::progress::{ProgressParser, ProgressUpdate};
-use super::scheduler::{
-    CancellationToken, EventSink, ExecutionOutcome, JobExecution, JobExecutor,
-};
+use super::scheduler::{CancellationToken, EventSink, ExecutionOutcome, JobExecution, JobExecutor};
 use super::temp_output::{TempOutput, TempOutputError};
 
 pub const MAX_STDERR_BYTES: usize = 16 * 1024;
@@ -48,11 +46,14 @@ impl FfmpegRunner {
     fn program(&self) -> Result<OsString, JobError> {
         match &self.program {
             RunnerProgram::Fixed(program) => Ok(program.clone()),
-            RunnerProgram::Located(tools) => tools.resolve("ffmpeg").map(|path| path.into_os_string()).map_err(|error| JobError {
-                code: "media_tool_unavailable".to_owned(),
-                message: "The bundled FFmpeg executable is not available".to_owned(),
-                details: Some(error.to_string()),
-            }),
+            RunnerProgram::Located(tools) => tools
+                .resolve("ffmpeg")
+                .map(|path| path.into_os_string())
+                .map_err(|error| JobError {
+                    code: "media_tool_unavailable".to_owned(),
+                    message: "The bundled FFmpeg executable is not available".to_owned(),
+                    details: Some(error.to_string()),
+                }),
         }
     }
 
@@ -65,7 +66,10 @@ impl FfmpegRunner {
         if cancellation.is_cancelled() {
             return Err(cancelled_error());
         }
-        if paths_match(Path::new(&execution.job.source_path), &execution.plan.output_path) {
+        if paths_match(
+            Path::new(&execution.job.source_path),
+            &execution.plan.output_path,
+        ) {
             return Err(JobError {
                 code: "path_collision".to_owned(),
                 message: "The output path must not overwrite the source path".to_owned(),
@@ -177,7 +181,11 @@ impl FfmpegRunner {
                     stop_child(&mut child);
                     let _ = progress_thread.join();
                     let _ = stderr_thread.join();
-                    return Err(io_error("ffmpeg_wait_failed", "Could not wait for FFmpeg", error));
+                    return Err(io_error(
+                        "ffmpeg_wait_failed",
+                        "Could not wait for FFmpeg",
+                        error,
+                    ));
                 }
             }
         };
@@ -224,9 +232,7 @@ impl FfmpegRunner {
             });
         }
 
-        let commit = cancellation
-            .begin_commit()
-            .map_err(|_| cancelled_error())?;
+        let commit = cancellation.begin_commit().map_err(|_| cancelled_error())?;
         match temp.commit() {
             Ok(publication) => {
                 let cleanup_warning = publication.cleanup_warning.map(|details| JobError {
@@ -361,7 +367,7 @@ fn validate_plan_arguments(execution: &JobExecution) -> Result<Vec<OsString>, Jo
     let input_path = args.get(input_index + 1).ok_or_else(|| {
         invalid_arguments_error("The conversion plan -i argument is missing its path")
     })?;
-    if PathBuf::from(input_path) != PathBuf::from(&execution.job.source_path) {
+    if Path::new(input_path) != Path::new(&execution.job.source_path) {
         return Err(invalid_arguments_error(
             "The conversion plan input path does not match the typed source path",
         ));
@@ -369,7 +375,7 @@ fn validate_plan_arguments(execution: &JobExecution) -> Result<Vec<OsString>, Jo
     let output_path = args
         .last()
         .ok_or_else(|| invalid_arguments_error("The conversion plan is missing its output path"))?;
-    if PathBuf::from(output_path) != execution.plan.output_path {
+    if Path::new(output_path) != execution.plan.output_path.as_path() {
         return Err(invalid_arguments_error(
             "The conversion plan output path does not match the typed destination",
         ));
@@ -428,10 +434,8 @@ mod tests {
     use super::{CancellationToken, FfmpegRunner, JobExecution, MAX_STDERR_BYTES};
 
     fn fixture_directory(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "lumaflow-runner-{name}-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("lumaflow-runner-{name}-{}", std::process::id()));
         // A test that panics leaves its fixture directory behind, and a later run that
         // reuses the same PID would inherit those files and break the exact-count
         // assertions, so each test starts from an empty fixture directory.
@@ -449,7 +453,7 @@ mod tests {
         handle.sync_all().expect("fixture path should be durable");
     }
 
-    fn fake_program(directory: &PathBuf, body: &str) -> PathBuf {
+    fn fake_program(directory: &Path, body: &str) -> PathBuf {
         let path = directory.join("fake-ffmpeg.sh");
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("fake program should be writable");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
@@ -458,7 +462,7 @@ mod tests {
         path
     }
 
-    fn execution(directory: &PathBuf) -> JobExecution {
+    fn execution(directory: &Path) -> JobExecution {
         let source = directory.join("source.wav");
         let output = directory.join("result.flac");
         fs::write(&source, b"source").expect("source should be writable");
@@ -508,7 +512,11 @@ mod tests {
                 ffmpeg_args: vec![
                     "-i".into(),
                     source.to_string_lossy().into_owned().into(),
-                    directory.join("result.flac").to_string_lossy().into_owned().into(),
+                    directory
+                        .join("result.flac")
+                        .to_string_lossy()
+                        .into_owned()
+                        .into(),
                 ],
             },
         }
@@ -538,7 +546,10 @@ mod tests {
             .run(execution, CancellationToken::new(), event_sink)
             .expect("fake FFmpeg should succeed");
 
-        assert_eq!(fs::read(output).expect("final output should exist"), b"converted");
+        assert_eq!(
+            fs::read(output).expect("final output should exist"),
+            b"converted"
+        );
         assert!(events.lock().expect("event lock should succeed").iter().any(
             |event| matches!(event, JobEvent::Progress { progress, .. } if (*progress - 0.25).abs() < f64::EPSILON)
         ));
@@ -630,15 +641,26 @@ mod tests {
             .count()
             < 3
         {
-            assert!(std::time::Instant::now() < deadline, "runner should create temp output");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "runner should create temp output"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         token.cancel();
-        let error = worker.join().expect("runner thread should join").expect_err("run should cancel");
+        let error = worker
+            .join()
+            .expect("runner thread should join")
+            .expect_err("run should cancel");
 
         assert_eq!(error.code, "cancelled");
         assert!(!output.exists());
-        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 2);
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture should be readable")
+                .count(),
+            2
+        );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 
@@ -658,7 +680,10 @@ mod tests {
             .expect_err("existing destination should be rejected");
 
         assert_eq!(error.code, "destination_exists");
-        assert_eq!(fs::read(output).expect("existing output should remain"), b"original");
+        assert_eq!(
+            fs::read(output).expect("existing output should remain"),
+            b"original"
+        );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 
@@ -677,7 +702,12 @@ mod tests {
             .expect_err("mismatched source should be rejected");
 
         assert_eq!(error.code, "invalid_ffmpeg_arguments");
-        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 1);
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture should be readable")
+                .count(),
+            1
+        );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 
@@ -685,7 +715,11 @@ mod tests {
     fn rejects_mismatched_typed_destination_before_spawning() {
         let directory = fixture_directory("destination-mismatch");
         let mut execution = execution(&directory);
-        *execution.plan.ffmpeg_args.last_mut().expect("output argument should exist") = directory
+        *execution
+            .plan
+            .ffmpeg_args
+            .last_mut()
+            .expect("output argument should exist") = directory
             .join("other.flac")
             .to_string_lossy()
             .into_owned()
@@ -696,7 +730,12 @@ mod tests {
             .expect_err("mismatched destination should be rejected");
 
         assert_eq!(error.code, "invalid_ffmpeg_arguments");
-        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 1);
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture should be readable")
+                .count(),
+            1
+        );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 
@@ -709,7 +748,12 @@ mod tests {
             .expect_err("missing FFmpeg should fail to spawn");
 
         assert_eq!(error.code, "ffmpeg_spawn_failed");
-        assert_eq!(fs::read_dir(&directory).expect("fixture should be readable").count(), 1);
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture should be readable")
+                .count(),
+            1
+        );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 
@@ -729,10 +773,7 @@ mod tests {
     #[test]
     fn caps_stored_ffmpeg_stderr() {
         let directory = fixture_directory("stderr-cap");
-        let program = fake_program(
-            &directory,
-            "printf '%050000d' 0 >&2; exit 9",
-        );
+        let program = fake_program(&directory, "printf '%050000d' 0 >&2; exit 9");
         let execution = execution(&directory);
         let error = FfmpegRunner::new(program)
             .run(execution, CancellationToken::new(), Arc::new(|_| {}))

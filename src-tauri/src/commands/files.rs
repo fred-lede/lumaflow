@@ -16,8 +16,7 @@ pub async fn select_files(
     state: State<'_, BackendState>,
 ) -> Result<Vec<String>, CommandError> {
     let (sender, mut receiver) = tauri::async_runtime::channel(1);
-    app
-        .dialog()
+    app.dialog()
         .file()
         .set_title("Select media files")
         .add_filter(
@@ -32,7 +31,12 @@ pub async fn select_files(
     let selected = receiver
         .recv()
         .await
-        .ok_or_else(|| CommandError::new("file_picker_failed", "The file picker did not return a result"))?
+        .ok_or_else(|| {
+            CommandError::new(
+                "file_picker_failed",
+                "The file picker did not return a result",
+            )
+        })?
         .unwrap_or_default();
 
     let mut paths = Vec::with_capacity(selected.len());
@@ -63,17 +67,18 @@ pub async fn select_output_folder(
     state: State<'_, BackendState>,
 ) -> Result<Option<String>, CommandError> {
     let (sender, mut receiver) = tauri::async_runtime::channel(1);
-    app
-        .dialog()
+    app.dialog()
         .file()
         .set_title("Select output folder")
         .pick_folder(move |selected| {
             let _ = sender.try_send(selected);
         });
-    let selected = receiver
-        .recv()
-        .await
-        .ok_or_else(|| CommandError::new("folder_picker_failed", "The folder picker did not return a result"))?;
+    let selected = receiver.recv().await.ok_or_else(|| {
+        CommandError::new(
+            "folder_picker_failed",
+            "The folder picker did not return a result",
+        )
+    })?;
     let Some(selected_path) = selected else {
         return Ok(None);
     };
@@ -118,10 +123,7 @@ pub fn analyze_files(
 }
 
 #[tauri::command]
-pub fn consume_dropped_paths(
-    state: State<'_, BackendState>,
-    paths: Vec<String>,
-) -> Vec<String> {
+pub fn consume_dropped_paths(state: State<'_, BackendState>, paths: Vec<String>) -> Vec<String> {
     state.consume_trusted_dropped_paths(&paths)
 }
 
@@ -492,11 +494,9 @@ mod tests {
         let expected =
             fs::canonicalize(&directory).expect("test output directory should canonicalize");
 
-        let normalized = validate_and_register_output_directory(
-            &state,
-            &raw_path.to_string_lossy(),
-        )
-        .expect("existing output directory should validate");
+        let normalized =
+            validate_and_register_output_directory(&state, &raw_path.to_string_lossy())
+                .expect("existing output directory should validate");
 
         assert_eq!(normalized, expected.to_string_lossy());
         assert!(state.is_registered_output_directory(&expected));
