@@ -130,7 +130,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --test real_media_fixtures
 
 ## real-media advisory policy
 
-The `real-media` job in the CI workflow is advisory. A failure reds the job,
+The `real-media` job in the CI workflow is advisory. A failure turns the job red,
 writes a workflow warning, and appends to the step summary, but the workflow
 stays green and the merge is not blocked.
 
