@@ -85,7 +85,7 @@ impl TempOutput {
         self.commit_inner(
             None::<fn()>,
             |source, destination| fs::hard_link(source, destination),
-            |path| remove_if_present(path),
+            remove_if_present,
         )
     }
 
@@ -156,7 +156,7 @@ impl TempOutput {
         self.commit_inner(
             None::<fn()>,
             move |_, _| Err(io::Error::new(error.kind(), error.to_string())),
-            |path| remove_if_present(path),
+            remove_if_present,
         )
     }
 

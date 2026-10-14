@@ -694,10 +694,7 @@ fn require_generated_fixtures(spec: &TrustedSpec, trusted_ffmpeg: &TrustedBinary
     spec.generation
         .fixtures
         .iter()
-        .map(|name| {
-            let path = directory.join(&name.name);
-            path
-        })
+        .map(|name| directory.join(&name.name))
         .collect()
 }
 

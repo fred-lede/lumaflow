@@ -367,7 +367,7 @@ fn validate_plan_arguments(execution: &JobExecution) -> Result<Vec<OsString>, Jo
     let input_path = args.get(input_index + 1).ok_or_else(|| {
         invalid_arguments_error("The conversion plan -i argument is missing its path")
     })?;
-    if PathBuf::from(input_path) != PathBuf::from(&execution.job.source_path) {
+    if Path::new(input_path) != Path::new(&execution.job.source_path) {
         return Err(invalid_arguments_error(
             "The conversion plan input path does not match the typed source path",
         ));
@@ -375,7 +375,7 @@ fn validate_plan_arguments(execution: &JobExecution) -> Result<Vec<OsString>, Jo
     let output_path = args
         .last()
         .ok_or_else(|| invalid_arguments_error("The conversion plan is missing its output path"))?;
-    if PathBuf::from(output_path) != execution.plan.output_path {
+    if Path::new(output_path) != execution.plan.output_path.as_path() {
         return Err(invalid_arguments_error(
             "The conversion plan output path does not match the typed destination",
         ));
@@ -453,7 +453,7 @@ mod tests {
         handle.sync_all().expect("fixture path should be durable");
     }
 
-    fn fake_program(directory: &PathBuf, body: &str) -> PathBuf {
+    fn fake_program(directory: &Path, body: &str) -> PathBuf {
         let path = directory.join("fake-ffmpeg.sh");
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("fake program should be writable");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
@@ -462,7 +462,7 @@ mod tests {
         path
     }
 
-    fn execution(directory: &PathBuf) -> JobExecution {
+    fn execution(directory: &Path) -> JobExecution {
         let source = directory.join("source.wav");
         let output = directory.join("result.flac");
         fs::write(&source, b"source").expect("source should be writable");
