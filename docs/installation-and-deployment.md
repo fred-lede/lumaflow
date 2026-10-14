@@ -112,6 +112,25 @@ node --experimental-strip-types scripts/check-third-party-licenses.ts --source-o
 
 若要執行真實媒體 fixture 測試，請先依照 [tests/fixtures/README.md](../tests/fixtures/README.md) 設定受信任的 FFmpeg 與 FFprobe 路徑。
 
+### 執行 real-media 層
+
+這層需要 pin 資產與現場生成的 fixtures，白名單為 `darwin-arm64` 與 `linux-x64`；CI 的 `real-media` job 目前是警報、不擋合併。
+
+以 `<target>` 代表目前平台（Mac 用 `darwin-arm64`、Linux 用 `linux-x64`），依序執行：
+
+~~~sh
+npm run prepare:ffmpeg
+export LUMAFLOW_FFMPEG_TEST_BIN="$PWD/src-tauri/binaries/<target>/ffmpeg"
+export LUMAFLOW_FFPROBE_TEST_BIN="$PWD/src-tauri/binaries/<target>/ffprobe"
+npm run fixtures
+cargo test --manifest-path src-tauri/Cargo.toml --test real_media_fixtures
+npm run test:e2e
+~~~
+
+`npm run prepare:ffmpeg` 在沒有指定 `--target` 時會準備 host 平台的資產；CI 傳入的是 `--target linux-x64`。
+
+`$PWD/...` 必須使用絕對路徑，因為 cargo 執行 integration-test binary 時工作目錄是 `src-tauri/`，使用相對路徑會找不到檔案。
+
 ## 5. FFmpeg/FFprobe 資產
 
 打包後，Rust backend 會從應用程式的 resource directory 讀取：

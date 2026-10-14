@@ -206,13 +206,38 @@ fn trusted_platform_key() -> &'static str { "linux-arm64" }
 )))]
 fn trusted_platform_key() -> &'static str { "unsupported-platform" }
 
-fn ensure_supported_platform() {
-    let platform = trusted_platform_key();
-    assert_eq!(
-        platform,
-        "darwin-arm64",
-        "Task 9 real-media verification is supported only on darwin-arm64; refusing unvalidated host {platform}"
+fn assert_platform_supported(platform: &str) {
+    assert!(
+        SUPPORTED_PLATFORMS.contains(&platform),
+        "real-media verification is supported only on {}; refusing unvalidated host {platform}",
+        SUPPORTED_PLATFORMS.join(", ")
     );
+}
+
+fn ensure_supported_platform() {
+    assert_platform_supported(trusted_platform_key());
+}
+
+const SUPPORTED_PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-x64"];
+
+#[test]
+fn platform_whitelist_matches_committed_trusted_asset_identities() {
+    // load_trusted_spec() 只讀 spec.json，不需要二進位或 fixtures
+    let spec = load_trusted_spec();
+    let mut whitelist: Vec<&str> = SUPPORTED_PLATFORMS.to_vec();
+    whitelist.sort_unstable();
+    let mut ffmpeg_ids: Vec<&str> = spec.ffmpeg.assets.keys().map(String::as_str).collect();
+    ffmpeg_ids.sort_unstable();
+    let mut ffprobe_ids: Vec<&str> = spec.ffprobe.assets.keys().map(String::as_str).collect();
+    ffprobe_ids.sort_unstable();
+    assert_eq!(whitelist, ffmpeg_ids, "platform whitelist must match FFmpeg trusted identities");
+    assert_eq!(whitelist, ffprobe_ids, "platform whitelist must match FFprobe trusted identities");
+}
+
+#[test]
+#[should_panic(expected = "refusing unvalidated host linux-arm64")]
+fn unvalidated_host_is_refused_with_an_explicit_message() {
+    assert_platform_supported("linux-arm64");
 }
 
 fn expected_parameters() -> TrustedParameters {
@@ -308,12 +333,14 @@ fn load_trusted_spec() -> TrustedSpec {
     assert_eq!(spec.generation, expected_generation(), "trusted generation vectors changed");
     assert_eq!(spec.ffmpeg.version_policy, "exact", "FFmpeg trust policy must be exact");
     assert_eq!(spec.ffmpeg.version, "8.1.2", "FFmpeg trusted version changed");
-    assert_eq!(spec.ffmpeg.assets.len(), 1, "FFmpeg trust policy must contain only the supported asset identity");
+    assert_eq!(spec.ffmpeg.assets.len(), 2, "FFmpeg trust policy must contain only the supported asset identities");
     assert_eq!(spec.ffmpeg.assets.get("darwin-arm64").map(|asset| asset.sha256.as_str()), Some("1332dc2de372bade9a8a63da0d6cdfab9de97fcefbae707bcc0b0506e1203327"));
+    assert_eq!(spec.ffmpeg.assets.get("linux-x64").map(|asset| asset.sha256.as_str()), Some("90864f57b2572877d4fe9ecd1c0ec25539b4d1982286cd7522f92c3985e0d9fe"));
     assert_eq!(spec.ffprobe.version_policy, "exact", "FFprobe trust policy must be exact");
     assert_eq!(spec.ffprobe.version, "8.1.2", "FFprobe trusted version changed");
-    assert_eq!(spec.ffprobe.assets.len(), 1, "FFprobe trust policy must contain only the supported asset identity");
+    assert_eq!(spec.ffprobe.assets.len(), 2, "FFprobe trust policy must contain only the supported asset identities");
     assert_eq!(spec.ffprobe.assets.get("darwin-arm64").map(|asset| asset.sha256.as_str()), Some("4322275c1c2ac6ba15c695b288788bc1204e75211b3d5c030e5812c82a6dff73"));
+    assert_eq!(spec.ffprobe.assets.get("linux-x64").map(|asset| asset.sha256.as_str()), Some("9fe8a3656406520d5fab158f1a2a04fb6c758063793a29a391fee4760d23d4ba"));
     spec
 }
 

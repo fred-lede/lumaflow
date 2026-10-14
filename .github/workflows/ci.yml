@@ -46,7 +46,8 @@ jobs:
 
       - name: Test Rust backend
         # The real-media integration target is asset-gated and runs in the
-        # explicit release/E2E workflow with the pinned binaries.
+        # separate `real-media` advisory job in this workflow (non-blocking:
+        # it reports failures without red-ing the workflow).
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Check deterministic fixture contract
@@ -57,6 +58,71 @@ jobs:
 
       - name: Build Tauri package smoke test
         run: npm exec -- tauri build --debug --bundles deb
+
+  real-media:
+    name: Real-media boundary (advisory)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    continue-on-error: true
+    env:
+      LUMAFLOW_FFMPEG_TEST_BIN: ${{ github.workspace }}/src-tauri/binaries/linux-x64/ffmpeg
+      LUMAFLOW_FFPROBE_TEST_BIN: ${{ github.workspace }}/src-tauri/binaries/linux-x64/ffprobe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            unzip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Prepare pinned FFmpeg assets
+        run: npm run prepare:ffmpeg -- --target linux-x64
+
+      - name: Generate deterministic fixtures
+        run: npm run fixtures
+
+      - name: Run real-media Cargo integration
+        id: cargo_real_media
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test real_media_fixtures
+
+      - name: Run real-media E2E suite
+        id: e2e_suite
+        run: npm run test:e2e
+
+      - name: Report advisory failure
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.cargo_real_media.outcome }}" != "success" ] || [ "${{ steps.e2e_suite.outcome }}" != "success" ]; then
+            echo "::warning::real-media advisory layer failed; merge is not blocked by this job"
+            {
+              echo "## real-media advisory failure"
+              echo ""
+              echo "- cargo outcome: \`${{ steps.cargo_real_media.outcome }}\`"
+              echo "- e2e outcome: \`${{ steps.e2e_suite.outcome }}\`"
+              echo ""
+              echo "This job is advisory. Do not set it as a required check while it is advisory."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -145,7 +211,7 @@ jobs:
           work="${RUNNER_TEMP}/lumaflow-ffmpeg"
           rm -rf "$work"
           mkdir -p "$work"
-          unzip -q "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}" -d "$work"
+          unzip -q "src-tauri/binaries/${{ matrix.archive_file }}" -d "$work"
           ffmpeg_path="$(find "$work" -type f -name ffmpeg -print -quit)"
           ffprobe_path="$(find "$work" -type f -name ffprobe -print -quit)"
           test -n "$ffmpeg_path" && test -n "$ffprobe_path"
@@ -163,7 +229,7 @@ jobs:
         run: |
           $work = Join-Path $env:RUNNER_TEMP "lumaflow-ffmpeg"
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $work
-          Expand-Archive -Path "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}" -DestinationPath $work
+          Expand-Archive -Path "src-tauri/binaries/${{ matrix.archive_file }}" -DestinationPath $work
           $ffmpeg = Get-ChildItem -Path $work -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $ffprobe = Get-ChildItem -Path $work -Recurse -Filter ffprobe.exe | Select-Object -First 1
           if ($null -eq $ffmpeg -or $null -eq $ffprobe) { throw "FFmpeg or FFprobe executable is absent from the release archive" }
@@ -210,7 +276,7 @@ jobs:
 
       - name: Remove source archive before packaging
         shell: bash
-        run: rm "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}"
+        run: rm "src-tauri/binaries/${{ matrix.archive_file }}"
 
       - name: Build release bundle
         shell: bash
