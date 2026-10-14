@@ -418,7 +418,7 @@ fn lexical_path(path: &Path) -> PathBuf {
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     use crate::domain::job::{JobEvent, JobState, ProcessingKind, QueueJob};
@@ -432,8 +432,21 @@ mod tests {
             "lumaflow-runner-{name}-{}",
             std::process::id()
         ));
+        // A test that panics leaves its fixture directory behind, and a later run that
+        // reuses the same PID would inherit those files and break the exact-count
+        // assertions, so each test starts from an empty fixture directory.
+        let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).expect("runner test directory should be creatable");
         directory
+    }
+
+    // A freshly written executable can still be mid-writeback when the runner execs it,
+    // which makes `Command::spawn` fail with ETXTBSY ("Text file busy", os error 26)
+    // once the suite runs on parallel test threads. Flushing the fixture before it is
+    // spawned closes that window.
+    fn sync_before_exec(path: &Path) {
+        let handle = fs::File::open(path).expect("fixture path should be readable");
+        handle.sync_all().expect("fixture path should be durable");
     }
 
     fn fake_program(directory: &PathBuf, body: &str) -> PathBuf {
@@ -441,6 +454,7 @@ mod tests {
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("fake program should be writable");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
             .expect("fake program should be executable");
+        sync_before_exec(&path);
         path
     }
 
