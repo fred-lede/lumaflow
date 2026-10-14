@@ -921,6 +921,12 @@ mod tests {
             _emit: super::EventSink,
         ) -> Result<ExecutionOutcome, JobError> {
             let job_id = execution.job.id;
+            // Record the job as active before announcing that it started: tests block
+            // on the started signal and then read `max_active`, so announcing first
+            // would let a reader observe a count that has not been recorded yet.
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+
             self.starts
                 .lock()
                 .expect("starts lock should succeed")
@@ -933,9 +939,6 @@ mod tests {
             {
                 sender.send(job_id).expect("test receiver should be alive");
             }
-
-            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-            self.max_active.fetch_max(active, Ordering::SeqCst);
             if let Some(gate) = &self.gate {
                 gate.wait(&cancellation);
             }
