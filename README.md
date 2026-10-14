@@ -1,6 +1,6 @@
 # LumaFlow
 
-[繁體中文](README.md) | [English](README_En.md)
+**繁體中文** | [English](README_En.md)
 
 LumaFlow 是 Tauri 2、React、TypeScript 與 Rust 寫成的桌面媒體轉檔工具。FFmpeg 與 FFprobe
 內嵌在每個發布目標裡，轉檔不依賴使用者電腦上的系統 FFmpeg。

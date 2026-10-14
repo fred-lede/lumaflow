@@ -1,6 +1,6 @@
 # LumaFlow
 
-[繁體中文](README.md) | [English](README_En.md)
+[繁體中文](README.md) | **English**
 
 LumaFlow is a desktop media conversion tool built with Tauri 2, React, TypeScript and Rust.
 FFmpeg and FFprobe ship inside every release target, so conversions do not depend on a system
