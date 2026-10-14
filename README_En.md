@@ -49,7 +49,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run check:licenses
 ```
 
-These are the same gates the CI `check` job runs, and that job blocks merges.
+These gates also run in the CI `check` job, which blocks merges.
 
 The real-media layer (fixtures plus E2E) needs the pinned assets and locally generated fixtures, and
 is whitelisted for `darwin-arm64` and `linux-x64`. In CI this layer is advisory: it reports, it does

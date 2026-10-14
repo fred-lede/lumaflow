@@ -163,10 +163,12 @@ message.
 
 ## Rust test soak advisory policy
 
-The `rust-test-soak` job runs the Rust lib suite 20 times across
-`--test-threads` 1, 16, 64 and 128. It is advisory: a failure turns the job red,
-writes a workflow warning, and appends the run and failure counts to the step
-summary, but the workflow stays green and the merge is not blocked.
+The `rust-test-soak` job runs the Rust lib suite 200 times: it builds the test
+binary once and then runs it 50 times at each of `--test-threads` 1, 16, 64 and
+128, under a 10-minute wall-clock budget inside the step. It is advisory: a
+failure turns the job red, writes a workflow warning, and appends the run,
+failure and truncation counts to the step summary, but the workflow stays green
+and the merge is not blocked.
 
 While the job is advisory, never mark `Rust test soak (advisory)` as a required
 check, for the same reason as the real-media job: branch protection evaluates

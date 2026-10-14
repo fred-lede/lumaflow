@@ -116,13 +116,16 @@ node --experimental-strip-types scripts/check-third-party-licenses.ts --source-o
 與 `cargo clippy -- -D warnings` 與 CI 的 `check` job 相同，都是擋合併的閘門；格式問題用
 `cargo fmt --manifest-path src-tauri/Cargo.toml --all` 重排即可。
 
-CI 另有一個警報性質的 `rust-test-soak` job，把 Rust lib 測試重跑 20 輪、依序用
-`--test-threads` 1、16、64、128，用來抓單次執行不會重現的競態。本地要重現：
+CI 另有一個警報性質的 `rust-test-soak` job：它先把 Rust lib 測試編成一支測試 binary，再直接
+重跑 200 輪，依序用 `--test-threads` 1、16、64、128 各 50 輪，用來抓單次執行不會重現的競態。
+本地要重現：
 
 ~~~sh
+cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
+binary="$PWD/src-tauri/target/debug/deps/$(ls -t src-tauri/target/debug/deps | grep '^lumaflow_lib-' | head -n1)"
 for threads in 1 16 64 128; do
-  for iteration in 1 2 3 4 5; do
-    cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads="$threads"
+  for iteration in $(seq 1 50); do
+    (cd src-tauri && "$binary" --test-threads="$threads" >/dev/null) || echo "FAIL threads=$threads iteration=$iteration"
   done
 done
 ~~~
