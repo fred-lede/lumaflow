@@ -314,7 +314,8 @@ impl Scheduler {
     }
 
     pub fn pause(&self) -> Result<(), SchedulerError> {
-        let mut state = self.shared
+        let mut state = self
+            .shared
             .state
             .lock()
             .expect("scheduler state lock should succeed");
@@ -326,7 +327,8 @@ impl Scheduler {
     }
 
     pub fn resume(&self) -> Result<(), SchedulerError> {
-        let mut state = self.shared
+        let mut state = self
+            .shared
             .state
             .lock()
             .expect("scheduler state lock should succeed");
@@ -352,7 +354,10 @@ impl Scheduler {
                 return Err(SchedulerError::CancellationRejected);
             }
 
-            let record = state.jobs.get_mut(job_id).ok_or(SchedulerError::JobNotFound)?;
+            let record = state
+                .jobs
+                .get_mut(job_id)
+                .ok_or(SchedulerError::JobNotFound)?;
             if !matches!(record.execution.job.state, JobState::Queued { .. }) {
                 return Err(SchedulerError::InvalidState);
             }
@@ -372,12 +377,7 @@ impl Scheduler {
                 record.execution.job.progress = 0.0;
                 (record.execution.job.state.clone(), record.attempt)
             };
-            let event = state_event(
-                &mut state,
-                job_id.to_owned(),
-                next_state,
-                attempt,
-            );
+            let event = state_event(&mut state, job_id.to_owned(), next_state, attempt);
             (event, Arc::clone(&state.event_sink))
         };
         dispatch_event(&self.shared, &sink, event);
@@ -419,7 +419,12 @@ impl Scheduler {
                 (record.execution.job.state.clone(), record.attempt)
             };
             state.pending.push_back(job_id.to_owned());
-            let event = state_event(&mut state, job_id.to_owned(), next_state, next_state_attempt);
+            let event = state_event(
+                &mut state,
+                job_id.to_owned(),
+                next_state,
+                next_state_attempt,
+            );
             (event, Arc::clone(&state.event_sink))
         };
         dispatch_event(&self.shared, &sink, event);
@@ -438,7 +443,12 @@ impl Scheduler {
             jobs: state
                 .order
                 .iter()
-                .filter_map(|id| state.jobs.get(id).map(|record| record.execution.job.clone()))
+                .filter_map(|id| {
+                    state
+                        .jobs
+                        .get(id)
+                        .map(|record| record.execution.job.clone())
+                })
                 .collect(),
             paused: state.paused,
         }
@@ -459,7 +469,11 @@ impl Scheduler {
         let queued_ids = state
             .order
             .iter()
-            .filter(|id| state.jobs.get(*id).is_some_and(|record| matches!(record.execution.job.state, JobState::Queued { .. })))
+            .filter(|id| {
+                state.jobs.get(*id).is_some_and(|record| {
+                    matches!(record.execution.job.state, JobState::Queued { .. })
+                })
+            })
             .cloned()
             .collect::<HashSet<_>>();
         let requested_queued = requested_order
@@ -490,7 +504,11 @@ impl Scheduler {
             state.pending = state
                 .order
                 .iter()
-                .filter(|id| state.jobs.get(*id).is_some_and(|record| matches!(record.execution.job.state, JobState::Queued { .. })))
+                .filter(|id| {
+                    state.jobs.get(*id).is_some_and(|record| {
+                        matches!(record.execution.job.state, JobState::Queued { .. })
+                    })
+                })
                 .cloned()
                 .collect();
             bump_revision(&mut state);
@@ -508,12 +526,9 @@ impl Scheduler {
             .order
             .iter()
             .filter(|id| {
-                state
-                    .jobs
-                    .get(*id)
-                    .is_some_and(|record| {
-                        matches!(record.execution.job.state, JobState::Completed { .. })
-                    })
+                state.jobs.get(*id).is_some_and(|record| {
+                    matches!(record.execution.job.state, JobState::Completed { .. })
+                })
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -581,7 +596,10 @@ impl Drop for Scheduler {
 fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
     loop {
         let (execution, cancellation, sink, processing_event) = {
-            let mut state = shared.state.lock().expect("scheduler state lock should succeed");
+            let mut state = shared
+                .state
+                .lock()
+                .expect("scheduler state lock should succeed");
             loop {
                 if state.shutdown {
                     return;
@@ -613,7 +631,8 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
                     record.execution.job.progress = 0.0;
                     record.attempt
                 };
-                let processing_event = state_event(&mut state, job_id.clone(), processing_state, attempt);
+                let processing_event =
+                    state_event(&mut state, job_id.clone(), processing_state, attempt);
                 break (
                     execution,
                     cancellation,
@@ -630,7 +649,10 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
             let shared = Arc::clone(&shared);
             Arc::new(move |event: JobEvent| {
                 let Some((event, sink)) = (|| {
-                    let JobEvent::Progress { job_id, progress, .. } = event else {
+                    let JobEvent::Progress {
+                        job_id, progress, ..
+                    } = event
+                    else {
                         return None;
                     };
                     let mut state = shared.state.lock().ok()?;
@@ -638,7 +660,9 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
                         record.attempt == attempt
                             && !matches!(
                                 record.execution.job.state,
-                                JobState::Completed { .. } | JobState::Cancelled { .. } | JobState::Failed { .. }
+                                JobState::Completed { .. }
+                                    | JobState::Cancelled { .. }
+                                    | JobState::Failed { .. }
                             )
                     });
                     if !should_emit {
@@ -657,9 +681,15 @@ fn worker_loop(shared: Arc<Shared>, executor: Arc<dyn JobExecutor>) {
         };
         let result = executor.execute(execution.clone(), cancellation.clone(), progress_sink);
         let (event, sink) = {
-            let mut state = shared.state.lock().expect("scheduler state lock should succeed");
+            let mut state = shared
+                .state
+                .lock()
+                .expect("scheduler state lock should succeed");
             state.running.remove(&job_id);
-            let record = state.jobs.get_mut(&job_id).expect("running job should exist");
+            let record = state
+                .jobs
+                .get_mut(&job_id)
+                .expect("running job should exist");
             let next_state = if cancellation.is_cancelled() {
                 record.destination = None;
                 JobState::Cancelled {
@@ -828,9 +858,7 @@ mod tests {
     use std::sync::{mpsc, Arc, Condvar, Mutex};
     use std::time::Duration;
 
-    use crate::domain::job::{
-        JobError, JobEvent, JobState, ProcessingKind, QueueJob,
-    };
+    use crate::domain::job::{JobError, JobEvent, JobState, ProcessingKind, QueueJob};
     use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
     use crate::media::planner::ConversionPlan;
 
@@ -1080,14 +1108,24 @@ mod tests {
     fn reorders_only_queued_jobs_and_preserves_terminal_positions() {
         let executor = RecordingExecutor::immediate();
         let scheduler = scheduler(executor, 1);
-        scheduler.enqueue(execution("completed")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("completed"))
+            .expect("job should enqueue");
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
 
         scheduler.pause().expect("pause should succeed");
-        scheduler.enqueue(execution("queued-one")).expect("job should enqueue");
-        scheduler.enqueue(execution("queued-two")).expect("job should enqueue");
         scheduler
-            .reorder(vec!["completed".to_owned(), "queued-two".to_owned(), "queued-one".to_owned()])
+            .enqueue(execution("queued-one"))
+            .expect("job should enqueue");
+        scheduler
+            .enqueue(execution("queued-two"))
+            .expect("job should enqueue");
+        scheduler
+            .reorder(vec![
+                "completed".to_owned(),
+                "queued-two".to_owned(),
+                "queued-one".to_owned(),
+            ])
             .expect("queued jobs should reorder");
 
         assert_eq!(
@@ -1112,23 +1150,39 @@ mod tests {
         let executor = RecordingExecutor::fail_first();
         let scheduler = scheduler(executor, 1);
         scheduler.set_event_sink(Arc::new(move |event| {
-            captured.lock().expect("event lock should succeed").push(event);
+            captured
+                .lock()
+                .expect("event lock should succeed")
+                .push(event);
         }));
 
-        scheduler.enqueue(execution("retry-metadata")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("retry-metadata"))
+            .expect("job should enqueue");
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
-        scheduler.retry("retry-metadata").expect("failed job should retry");
+        scheduler
+            .retry("retry-metadata")
+            .expect("failed job should retry");
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
 
         let events = events.lock().expect("event lock should succeed");
         let sequences = events
             .iter()
             .map(|event| match event {
-                JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => *sequence,
+                JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => {
+                    *sequence
+                }
             })
             .collect::<Vec<_>>();
         assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(events.iter().any(|event| matches!(event, JobEvent::StateChanged { attempt: 1, state: JobState::Queued { .. }, .. })));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            JobEvent::StateChanged {
+                attempt: 1,
+                state: JobState::Queued { .. },
+                ..
+            }
+        )));
         assert_eq!(scheduler.snapshot().jobs[0].attempt, 1);
     }
 
@@ -1139,9 +1193,14 @@ mod tests {
         let captured = Arc::clone(&delivered);
         let sink: EventSink = Arc::new(move |event: JobEvent| {
             let sequence = match event {
-                JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => sequence,
+                JobEvent::StateChanged { sequence, .. } | JobEvent::Progress { sequence, .. } => {
+                    sequence
+                }
             };
-            captured.lock().expect("event lock should succeed").push(sequence);
+            captured
+                .lock()
+                .expect("event lock should succeed")
+                .push(sequence);
         });
 
         dispatch_event(
@@ -1155,7 +1214,10 @@ mod tests {
                 attempt: 0,
             },
         );
-        assert!(delivered.lock().expect("event lock should succeed").is_empty());
+        assert!(delivered
+            .lock()
+            .expect("event lock should succeed")
+            .is_empty());
 
         dispatch_event(
             &scheduler.shared,
@@ -1169,7 +1231,10 @@ mod tests {
             },
         );
 
-        assert_eq!(*delivered.lock().expect("event lock should succeed"), vec![1, 2]);
+        assert_eq!(
+            *delivered.lock().expect("event lock should succeed"),
+            vec![1, 2]
+        );
     }
 
     #[test]
@@ -1180,8 +1245,12 @@ mod tests {
         let max_active = Arc::clone(&executor.max_active);
         let scheduler = scheduler(executor, 2);
 
-        scheduler.enqueue(execution("one")).expect("job should enqueue");
-        scheduler.enqueue(execution("two")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("one"))
+            .expect("job should enqueue");
+        scheduler
+            .enqueue(execution("two"))
+            .expect("job should enqueue");
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("first job should start");
@@ -1201,8 +1270,12 @@ mod tests {
         let executor = RecordingExecutor::blocking(started_tx, Arc::clone(&gate));
         let scheduler = Scheduler::with_default_concurrency(executor);
 
-        scheduler.enqueue(execution("default-one")).expect("job should enqueue");
-        scheduler.enqueue(execution("default-two")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("default-one"))
+            .expect("job should enqueue");
+        scheduler
+            .enqueue(execution("default-two"))
+            .expect("job should enqueue");
         assert_eq!(
             started_rx
                 .recv_timeout(Duration::from_secs(1))
@@ -1286,7 +1359,10 @@ mod tests {
             .enqueue(execution("paused"))
             .expect("job should enqueue");
         std::thread::sleep(Duration::from_millis(40));
-        assert!(starts.lock().expect("starts lock should succeed").is_empty());
+        assert!(starts
+            .lock()
+            .expect("starts lock should succeed")
+            .is_empty());
 
         scheduler.resume().expect("resume should succeed");
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
@@ -1304,12 +1380,18 @@ mod tests {
         let starts = Arc::clone(&executor.starts);
         let scheduler = scheduler(executor, 1);
 
-        scheduler.enqueue(execution("running")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("running"))
+            .expect("job should enqueue");
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("first job should start");
-        scheduler.enqueue(execution("cancelled")).expect("job should enqueue");
-        scheduler.cancel("cancelled").expect("queued job should cancel");
+        scheduler
+            .enqueue(execution("cancelled"))
+            .expect("job should enqueue");
+        scheduler
+            .cancel("cancelled")
+            .expect("queued job should cancel");
         gate.release();
 
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
@@ -1331,7 +1413,9 @@ mod tests {
         let executor = RecordingExecutor::fail_first();
         let starts = Arc::clone(&executor.starts);
         let scheduler = scheduler(executor, 1);
-        scheduler.enqueue(execution("retry")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("retry"))
+            .expect("job should enqueue");
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
         assert!(matches!(
             scheduler.snapshot().jobs[0].state,
@@ -1356,7 +1440,9 @@ mod tests {
         let executor = RecordingExecutor::fail_first();
         let starts = Arc::clone(&executor.starts);
         let scheduler = Arc::new(scheduler(executor, 1));
-        scheduler.enqueue(execution("duplicate")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("duplicate"))
+            .expect("job should enqueue");
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
         assert_eq!(
             scheduler.enqueue(execution("duplicate")),
@@ -1365,8 +1451,12 @@ mod tests {
 
         let left = Arc::clone(&scheduler);
         let right = Arc::clone(&scheduler);
-        let left_result = std::thread::spawn(move || left.retry("duplicate")).join().unwrap();
-        let right_result = std::thread::spawn(move || right.retry("duplicate")).join().unwrap();
+        let left_result = std::thread::spawn(move || left.retry("duplicate"))
+            .join()
+            .unwrap();
+        let right_result = std::thread::spawn(move || right.retry("duplicate"))
+            .join()
+            .unwrap();
         assert_eq!(
             [left_result, right_result]
                 .into_iter()
@@ -1388,11 +1478,15 @@ mod tests {
         let gate = Arc::new(Gate::new());
         let executor = RecordingExecutor::blocking(started_tx, Arc::clone(&gate));
         let scheduler = scheduler(executor, 1);
-        scheduler.enqueue(execution("running-cancel")).expect("job should enqueue");
+        scheduler
+            .enqueue(execution("running-cancel"))
+            .expect("job should enqueue");
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("job should start");
-        scheduler.cancel("running-cancel").expect("running job should cancel");
+        scheduler
+            .cancel("running-cancel")
+            .expect("running job should cancel");
         gate.release();
         assert!(scheduler.wait_for_idle(Duration::from_secs(1)));
         assert!(matches!(
@@ -1473,5 +1567,4 @@ mod tests {
             } if code == "temp_cleanup_failed"
         ));
     }
-
 }

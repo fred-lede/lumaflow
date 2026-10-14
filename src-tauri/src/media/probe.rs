@@ -7,8 +7,8 @@ use crate::domain::media::{
     VideoStreamInfo,
 };
 
-use super::MediaError;
 use super::tools::ToolLocator;
+use super::MediaError;
 
 pub struct CommandOutput {
     pub status: i32,
@@ -71,7 +71,10 @@ impl CommandRunner for ProcessCommandRunner {
     }
 }
 
-pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Result<MediaInfo, MediaError> {
+pub fn probe_media<R: CommandRunner>(
+    runner: &R,
+    path: impl AsRef<Path>,
+) -> Result<MediaInfo, MediaError> {
     let path = path.as_ref();
     let path_string = path.to_string_lossy().into_owned();
     let args = vec![
@@ -102,10 +105,8 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
     })?;
 
     let format = required_object(&document, "format")?;
-    let container = super::resolve_container_name(
-        &required_string(format, "format_name")?,
-        &path_string,
-    )?;
+    let container =
+        super::resolve_container_name(&required_string(format, "format_name")?, &path_string)?;
     let duration_seconds = required_f64(format, "duration")?;
     let size_bytes = required_u64(format, "size")?;
     let streams = document
@@ -157,7 +158,9 @@ pub fn probe_media<R: CommandRunner>(runner: &R, path: impl AsRef<Path>) -> Resu
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| MediaError::new("probe_invalid_path", "Media path has no valid file name"))?;
+        .ok_or_else(|| {
+            MediaError::new("probe_invalid_path", "Media path has no valid file name")
+        })?;
     let source_quality = assess_source_quality(runner, &document, &audio_streams, &path_string);
 
     Ok(MediaInfo {
@@ -183,9 +186,11 @@ fn assess_source_quality<R: CommandRunner>(
         return SourceQualityAssessment::unknown();
     }
 
-    if let Some(codec) = audio_streams.iter().map(|stream| stream.codec.as_str()).find(|codec| {
-        is_lossy_codec(codec)
-    }) {
+    if let Some(codec) = audio_streams
+        .iter()
+        .map(|stream| stream.codec.as_str())
+        .find(|codec| is_lossy_codec(codec))
+    {
         return SourceQualityAssessment {
             status: SourceQualityStatus::LossySource,
             summary: "Source uses a lossy audio codec".to_owned(),
@@ -260,10 +265,19 @@ fn suspicious_encoder_tags(document: &Value) -> Vec<String> {
                 continue;
             };
             for (key, value) in tags {
-                let Some(value) = value.as_str() else { continue };
+                let Some(value) = value.as_str() else {
+                    continue;
+                };
                 let normalized = value.to_ascii_lowercase();
                 if [
-                    "lame", "mp3", "libmp3lame", "aac", "faac", "fdk-aac", "vorbis", "opus",
+                    "lame",
+                    "mp3",
+                    "libmp3lame",
+                    "aac",
+                    "faac",
+                    "fdk-aac",
+                    "vorbis",
+                    "opus",
                 ]
                 .iter()
                 .any(|marker| normalized.contains(marker))
@@ -329,9 +343,7 @@ fn required_string(document: &Value, field: &str) -> Result<String, MediaError> 
 }
 
 fn required_f64(document: &Value, field: &str) -> Result<f64, MediaError> {
-    let value = document
-        .get(field)
-        .ok_or_else(|| missing_field(field))?;
+    let value = document.get(field).ok_or_else(|| missing_field(field))?;
     let parsed = match value {
         Value::Number(number) => number.as_f64(),
         Value::String(string) => string.parse().ok(),
@@ -390,9 +402,7 @@ fn required_frame_rate(document: &Value, field: &str) -> Result<String, MediaErr
             let numerator = numerator.parse::<f64>().ok();
             let denominator = denominator.parse::<f64>().ok();
             match (numerator, denominator) {
-                (Some(numerator), Some(denominator))
-                    if numerator > 0.0 && denominator > 0.0 =>
-                {
+                (Some(numerator), Some(denominator)) if numerator > 0.0 && denominator > 0.0 => {
                     Some(numerator / denominator)
                 }
                 _ => None,
@@ -412,9 +422,7 @@ fn parse_integer<T>(document: &Value, field: &str) -> Result<T, MediaError>
 where
     T: std::str::FromStr,
 {
-    let value = document
-        .get(field)
-        .ok_or_else(|| missing_field(field))?;
+    let value = document.get(field).ok_or_else(|| missing_field(field))?;
     let parsed = match value {
         Value::Number(number) => number.to_string().parse().ok(),
         Value::String(string) => string.parse().ok(),
@@ -599,7 +607,10 @@ mod tests {
         );
         assert_eq!(runner.calls.borrow().len(), 1);
         assert_eq!(runner.calls.borrow()[0].0, "ffprobe");
-        assert_eq!(runner.calls.borrow()[0].1.last(), Some(&"/input/movie.mp4".to_owned()));
+        assert_eq!(
+            runner.calls.borrow()[0].1.last(),
+            Some(&"/input/movie.mp4".to_owned())
+        );
     }
 
     #[test]
@@ -638,10 +649,8 @@ mod tests {
     #[test]
     fn preserves_explicit_mp4_mov_and_m4a_container_names() {
         for (format_name, extension) in [("mp4", "mp4"), ("mov", "mov"), ("m4a", "m4a")] {
-            let json = REAL_STYLE_MP4_JSON.replace(
-                "\"mov,mp4,m4a,3gp,3g2,mj2\"",
-                &format!("\"{format_name}\""),
-            );
+            let json = REAL_STYLE_MP4_JSON
+                .replace("\"mov,mp4,m4a,3gp,3g2,mj2\"", &format!("\"{format_name}\""));
             let actual = probe_media(
                 &FakeRunner::successful(&json),
                 format!("/input/media.{extension}"),
@@ -654,21 +663,12 @@ mod tests {
 
     #[test]
     fn disambiguates_matroska_webm_composite_using_mkv_and_webm_extensions() {
-        let json = REAL_STYLE_MP4_JSON.replace(
-            "\"mov,mp4,m4a,3gp,3g2,mj2\"",
-            "\"matroska,webm\"",
-        );
+        let json = REAL_STYLE_MP4_JSON.replace("\"mov,mp4,m4a,3gp,3g2,mj2\"", "\"matroska,webm\"");
 
-        let mkv = probe_media(
-            &FakeRunner::successful(&json),
-            "/input/movie.mkv",
-        )
-        .expect("MKV metadata should probe");
-        let webm = probe_media(
-            &FakeRunner::successful(&json),
-            "/input/movie.webm",
-        )
-        .expect("WebM metadata should probe");
+        let mkv = probe_media(&FakeRunner::successful(&json), "/input/movie.mkv")
+            .expect("MKV metadata should probe");
+        let webm = probe_media(&FakeRunner::successful(&json), "/input/movie.webm")
+            .expect("WebM metadata should probe");
 
         assert_eq!(mkv.container, "matroska");
         assert_eq!(webm.container, "webm");
@@ -678,11 +678,8 @@ mod tests {
     fn rejects_unknown_data_attachment_and_stream_types_instead_of_dropping_them() {
         for stream_type in ["data", "attachment", "unknown"] {
             let json = UNKNOWN_STREAM_JSON.replace("\"data\"", &format!("\"{stream_type}\""));
-            let error = probe_media(
-                &FakeRunner::successful(&json),
-                "/input/movie.mp4",
-            )
-            .expect_err("unsupported stream types must not be dropped");
+            let error = probe_media(&FakeRunner::successful(&json), "/input/movie.mp4")
+                .expect_err("unsupported stream types must not be dropped");
 
             assert_eq!(error.code, "unsupported_streams");
             assert!(error.message.contains(stream_type));
@@ -700,11 +697,8 @@ mod tests {
             (invalid_channels, "channels"),
             (invalid_sample_rate, "sample_rate"),
         ] {
-            let error = probe_media(
-                &FakeRunner::successful(&json),
-                "/input/media",
-            )
-            .expect_err("zero metadata values must be rejected");
+            let error = probe_media(&FakeRunner::successful(&json), "/input/media")
+                .expect_err("zero metadata values must be rejected");
 
             assert_eq!(error.code, "probe_invalid_field");
             assert!(error.message.contains(field));
@@ -715,11 +709,8 @@ mod tests {
     fn rejects_zero_and_non_numeric_frame_rates() {
         for frame_rate in ["0/0", "0", "not-a-rate", "-30/-1", "1001/1"] {
             let json = MP4_JSON.replace("\"30000/1001\"", &format!("\"{frame_rate}\""));
-            let error = probe_media(
-                &FakeRunner::successful(&json),
-                "/input/movie.mp4",
-            )
-            .expect_err("invalid frame rates must be rejected");
+            let error = probe_media(&FakeRunner::successful(&json), "/input/movie.mp4")
+                .expect_err("invalid frame rates must be rejected");
 
             assert_eq!(error.code, "probe_invalid_field");
             assert!(error.message.contains("frame rate"));
@@ -743,11 +734,8 @@ mod tests {
             "\"mov,mp4,m4a,3gp,3g2,mj2\"",
             "\"mov,mp4,m4a,3gp,3g2,mj2,custom\"",
         );
-        let error = probe_media(
-            &FakeRunner::successful(&json),
-            "/input/movie.mp4",
-        )
-        .expect_err("arbitrary composite names must not be accepted by fragment matching");
+        let error = probe_media(&FakeRunner::successful(&json), "/input/movie.mp4")
+            .expect_err("arbitrary composite names must not be accepted by fragment matching");
 
         assert_eq!(error.code, "unknown_container");
     }
@@ -780,7 +768,11 @@ mod tests {
             actual.source_quality.status,
             SourceQualityStatus::PossiblyTranscodedLossy
         );
-        assert!(actual.source_quality.evidence.iter().any(|evidence| evidence.contains("LAME")));
+        assert!(actual
+            .source_quality
+            .evidence
+            .iter()
+            .any(|evidence| evidence.contains("LAME")));
     }
 
     #[test]
@@ -795,7 +787,10 @@ mod tests {
         )
         .expect("FLAC with spectral evidence should probe");
 
-        assert_eq!(actual.source_quality.status, SourceQualityStatus::LikelyNativeLossless);
+        assert_eq!(
+            actual.source_quality.status,
+            SourceQualityStatus::LikelyNativeLossless
+        );
     }
 
     #[test]

@@ -35,7 +35,10 @@ pub fn input_and_output_args(
     maps.sort_unstable();
 
     for stream_index in maps {
-        args.extend([OsString::from("-map"), OsString::from(format!("0:{stream_index}"))]);
+        args.extend([
+            OsString::from("-map"),
+            OsString::from(format!("0:{stream_index}")),
+        ]);
     }
 
     match mode {

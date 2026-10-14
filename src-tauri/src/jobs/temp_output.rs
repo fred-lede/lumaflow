@@ -44,7 +44,10 @@ impl TempOutput {
 
         for _ in 0..32 {
             let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-            let name = format!(".{stem}.lumaflow-{id}-{}.tmp{extension}", std::process::id());
+            let name = format!(
+                ".{stem}.lumaflow-{id}-{}.tmp{extension}",
+                std::process::id()
+            );
             let path = directory.join(name);
             match OpenOptions::new()
                 .create_new(true)
@@ -201,10 +204,8 @@ mod tests {
     use super::{TempOutput, TempOutputError};
 
     fn destination() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "lumaflow-temp-output-test-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("lumaflow-temp-output-test-{}", std::process::id()));
         fs::create_dir_all(&path).expect("test destination should be creatable");
         path
     }
@@ -218,7 +219,10 @@ mod tests {
 
         assert_ne!(first.path(), second.path());
         assert_ne!(first.path(), final_path.as_path());
-        assert_eq!(first.path().extension().and_then(|value| value.to_str()), Some("flac"));
+        assert_eq!(
+            first.path().extension().and_then(|value| value.to_str()),
+            Some("flac")
+        );
         assert!(first.path().starts_with(&directory));
         assert!(first.path().exists());
         assert!(second.path().exists());
@@ -240,7 +244,10 @@ mod tests {
         };
 
         assert!(!temp_path.exists());
-        assert_eq!(fs::read(&final_path).expect("final output should exist"), b"finished output");
+        assert_eq!(
+            fs::read(&final_path).expect("final output should exist"),
+            b"finished output"
+        );
     }
 
     #[test]
@@ -270,7 +277,10 @@ mod tests {
         };
 
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(fs::read(final_path).expect("existing output should remain"), b"original");
+        assert_eq!(
+            fs::read(final_path).expect("existing output should remain"),
+            b"original"
+        );
     }
 
     #[test]
@@ -281,13 +291,19 @@ mod tests {
         let temp_path = temp.path().to_owned();
 
         let error = temp
-            .commit_for_test(|| {
-                fs::write(&final_path, b"original").expect("destination should be created");
-            }, remove_temp)
+            .commit_for_test(
+                || {
+                    fs::write(&final_path, b"original").expect("destination should be created");
+                },
+                remove_temp,
+            )
             .expect_err("commit should not replace destination");
 
         assert!(matches!(error, TempOutputError::DestinationExists));
-        assert_eq!(fs::read(final_path).expect("existing output should remain"), b"original");
+        assert_eq!(
+            fs::read(final_path).expect("existing output should remain"),
+            b"original"
+        );
         assert!(!temp_path.exists());
     }
 
@@ -303,15 +319,21 @@ mod tests {
         fs::write(temp.path(), b"published").expect("test output should be writable");
 
         let publication = temp
-            .commit_for_test(|| {}, |_| {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "simulated temporary cleanup failure",
-                ))
-            })
+            .commit_for_test(
+                || {},
+                |_| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "simulated temporary cleanup failure",
+                    ))
+                },
+            )
             .expect("publication should succeed despite cleanup warning");
 
-        assert_eq!(fs::read(&final_path).expect("published output should exist"), b"published");
+        assert_eq!(
+            fs::read(&final_path).expect("published output should exist"),
+            b"published"
+        );
         assert_eq!(
             publication.cleanup_warning.as_deref(),
             Some("simulated temporary cleanup failure")
@@ -335,7 +357,9 @@ mod tests {
             ))
             .expect_err("unsupported publication should fail");
 
-        assert!(matches!(error, TempOutputError::PublicationUnavailable { details } if details.contains("hard links are unsupported")));
+        assert!(
+            matches!(error, TempOutputError::PublicationUnavailable { details } if details.contains("hard links are unsupported"))
+        );
         assert!(!final_path.exists());
         assert!(!temp_path.exists());
     }

@@ -82,7 +82,10 @@ mod tests {
             "commands::queue::reorder_jobs",
             "commands::queue::clear_completed",
         ] {
-            assert!(source.contains(command), "missing handler registration: {command}");
+            assert!(
+                source.contains(command),
+                "missing handler registration: {command}"
+            );
         }
         assert!(source.contains("DragDropEvent::Drop"));
         assert!(source.contains("on_webview_event"));
@@ -90,10 +93,9 @@ mod tests {
         assert!(source.contains("WindowEvent::DragDrop"));
         assert!(source.contains("register_trusted_dropped_paths"));
 
-        let capabilities: Value = serde_json::from_str(include_str!(
-            "../capabilities/default.json"
-        ))
-        .expect("default capabilities should be valid JSON");
+        let capabilities: Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("default capabilities should be valid JSON");
         let permissions = capabilities["permissions"]
             .as_array()
             .expect("capabilities should contain permissions");

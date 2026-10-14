@@ -112,11 +112,21 @@ mod tests {
             plan.processing_kind,
             ProcessingKind::LosslessRemux { .. }
         ));
-        assert_eq!(plan.output_path, std::path::PathBuf::from("/output/movie.mp4"));
+        assert_eq!(
+            plan.output_path,
+            std::path::PathBuf::from("/output/movie.mp4")
+        );
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/movie.mp4", "-map", "0:0", "-map", "0:1", "-c", "copy",
+                "-i",
+                "/input/movie.mp4",
+                "-map",
+                "0:0",
+                "-map",
+                "0:1",
+                "-c",
+                "copy",
                 "/output/movie.mp4"
             ]
         );
@@ -161,7 +171,10 @@ mod tests {
             plan.processing_kind,
             ProcessingKind::LosslessRemux { .. }
         ));
-        assert_eq!(plan.output_path, std::path::PathBuf::from("/output/movie.mov"));
+        assert_eq!(
+            plan.output_path,
+            std::path::PathBuf::from("/output/movie.mov")
+        );
         assert!(args(&plan).contains(&"copy".to_owned()));
     }
 
@@ -199,18 +212,31 @@ mod tests {
     fn mkv_remux_maps_multiple_audio_tracks_and_subtitles_explicitly() {
         let mut media = multi_audio_mp4();
         media.container = "matroska".to_owned();
-        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
-            codec: "subrip".to_owned(),
-            stream_index: 3,
-        });
+        media
+            .subtitle_streams
+            .push(crate::domain::media::SubtitleStreamInfo {
+                codec: "subrip".to_owned(),
+                stream_index: 3,
+            });
         let plan = plan_conversion(&media, &settings(OutputFormat::Mkv))
             .expect("compatible multi-track MKV should remux");
 
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/movie.mp4", "-map", "0:0", "-map", "0:1", "-map", "0:2", "-map",
-                "0:3", "-c", "copy", "/output/movie.mkv"
+                "-i",
+                "/input/movie.mp4",
+                "-map",
+                "0:0",
+                "-map",
+                "0:1",
+                "-map",
+                "0:2",
+                "-map",
+                "0:3",
+                "-c",
+                "copy",
+                "/output/movie.mkv"
             ]
         );
     }
@@ -227,8 +253,16 @@ mod tests {
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/voice.wav", "-map", "0:0", "-vn", "-c:a", "flac",
-                "-compression_level", "5", "/output/voice.flac"
+                "-i",
+                "/input/voice.wav",
+                "-map",
+                "0:0",
+                "-vn",
+                "-c:a",
+                "flac",
+                "-compression_level",
+                "5",
+                "/output/voice.flac"
             ]
         );
     }
@@ -245,8 +279,16 @@ mod tests {
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/movie.mp4", "-map", "0:1", "-vn", "-c:a", "libmp3lame",
-                "-q:a", "0", "/output/movie.mp3"
+                "-i",
+                "/input/movie.mp4",
+                "-map",
+                "0:1",
+                "-vn",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "0",
+                "/output/movie.mp3"
             ]
         );
     }
@@ -263,8 +305,16 @@ mod tests {
         assert_eq!(
             args(&plan),
             vec![
-                "-i", "/input/movie.mp4", "-map", "0:1", "-vn", "-c:a", "flac",
-                "-compression_level", "5", "/output/movie.flac"
+                "-i",
+                "/input/movie.mp4",
+                "-map",
+                "0:1",
+                "-vn",
+                "-c:a",
+                "flac",
+                "-compression_level",
+                "5",
+                "/output/movie.flac"
             ]
         );
     }
@@ -295,7 +345,15 @@ mod tests {
         ));
         assert_eq!(
             args(&plan),
-            vec!["-i", "/input/voice.mp3", "-map", "0:0", "-c", "copy", "/output/voice.mp3"]
+            vec![
+                "-i",
+                "/input/voice.mp3",
+                "-map",
+                "0:0",
+                "-c",
+                "copy",
+                "/output/voice.mp3"
+            ]
         );
     }
 
@@ -326,7 +384,9 @@ mod tests {
             plan.processing_kind,
             ProcessingKind::Transcoding { .. }
         ));
-        assert!(args(&plan).windows(2).any(|pair| pair == ["-c:v", "libx264"]));
+        assert!(args(&plan)
+            .windows(2)
+            .any(|pair| pair == ["-c:v", "libx264"]));
         assert!(args(&plan).windows(2).any(|pair| pair == ["-c:a", "aac"]));
     }
 
@@ -349,10 +409,12 @@ mod tests {
     #[test]
     fn mp4_with_subtitles_is_not_labeled_as_lossless_remux() {
         let mut media = mp4_media();
-        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
-            codec: "mov_text".to_owned(),
-            stream_index: 2,
-        });
+        media
+            .subtitle_streams
+            .push(crate::domain::media::SubtitleStreamInfo {
+                codec: "mov_text".to_owned(),
+                stream_index: 2,
+            });
 
         let error = plan_conversion(&media, &settings(OutputFormat::Mp4))
             .expect_err("the conservative MP4 matrix rejects subtitles");
@@ -399,10 +461,12 @@ mod tests {
     fn mkv_transcoding_rejects_subtitles_instead_of_dropping_them() {
         let mut media = mp4_media();
         media.container = "matroska".to_owned();
-        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
-            codec: "subrip".to_owned(),
-            stream_index: 2,
-        });
+        media
+            .subtitle_streams
+            .push(crate::domain::media::SubtitleStreamInfo {
+                codec: "subrip".to_owned(),
+                stream_index: 2,
+            });
         let mut output = settings(OutputFormat::Mkv);
         output.width = Some(1280);
 
@@ -416,10 +480,12 @@ mod tests {
     fn same_container_mkv_without_lossless_first_rejects_subtitles() {
         let mut media = mp4_media();
         media.container = "matroska".to_owned();
-        media.subtitle_streams.push(crate::domain::media::SubtitleStreamInfo {
-            codec: "subrip".to_owned(),
-            stream_index: 2,
-        });
+        media
+            .subtitle_streams
+            .push(crate::domain::media::SubtitleStreamInfo {
+                codec: "subrip".to_owned(),
+                stream_index: 2,
+            });
         let mut output = settings(OutputFormat::Mkv);
         output.lossless_first = false;
 
@@ -510,9 +576,15 @@ mod tests {
         let plan = plan_conversion(&media, &output).expect("special-character paths are valid");
         let arguments = args(&plan);
 
-        assert_eq!(plan.output_path, PathBuf::from("/output folder/My Clip [final] & cut.mp3"));
+        assert_eq!(
+            plan.output_path,
+            PathBuf::from("/output folder/My Clip [final] & cut.mp3")
+        );
         assert_eq!(arguments[1], "/input/My Clip [final] & cut.mp4");
-        assert_eq!(arguments.last(), Some(&"/output folder/My Clip [final] & cut.mp3".to_owned()));
+        assert_eq!(
+            arguments.last(),
+            Some(&"/output folder/My Clip [final] & cut.mp3".to_owned())
+        );
     }
 
     #[test]
@@ -618,7 +690,10 @@ mod tests {
             let error = plan_conversion(&mp4_media(), &output)
                 .expect_err("invalid target settings must fail before argument construction");
 
-            assert_eq!(error.code, "invalid_settings", "invalid {field} should be rejected");
+            assert_eq!(
+                error.code, "invalid_settings",
+                "invalid {field} should be rejected"
+            );
         }
     }
 
@@ -752,7 +827,6 @@ mod tests {
             ProcessingKind::LosslessRemux { .. }
         ));
     }
-
 }
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -780,9 +854,13 @@ pub fn plan_conversion(
     let source_container = resolve_container_name(&media.container, &media.path)?;
     let output_format = &settings.format;
     let mode = match output_format {
-        format if streams_fit_container(media, format)
-            && !has_stream_setting_changes(settings)
-            && settings.lossless_first => ProcessingMode::LosslessRemux(ArgumentMode::AllStreams),
+        format
+            if streams_fit_container(media, format)
+                && !has_stream_setting_changes(settings)
+                && settings.lossless_first =>
+        {
+            ProcessingMode::LosslessRemux(ArgumentMode::AllStreams)
+        }
         OutputFormat::Mp3 => {
             require_audio(media)?;
             ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
@@ -796,8 +874,7 @@ pub fn plan_conversion(
             ProcessingMode::LosslessAudio(ArgumentMode::FirstAudio)
         }
         OutputFormat::Flac
-            if is_pcm_source(media, &source_container)
-                && !has_stream_setting_changes(settings) =>
+            if is_pcm_source(media, &source_container) && !has_stream_setting_changes(settings) =>
         {
             require_audio(media)?;
             ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
@@ -806,13 +883,17 @@ pub fn plan_conversion(
             require_audio(media)?;
             ProcessingMode::Transcoding(ArgumentMode::FirstAudio)
         }
-        format if source_container == format.container_name()
-            && streams_fit_container(media, format)
-            && !has_stream_setting_changes(settings) => ProcessingMode::Transcoding(if format.is_audio_only() {
+        format
+            if source_container == format.container_name()
+                && streams_fit_container(media, format)
+                && !has_stream_setting_changes(settings) =>
+        {
+            ProcessingMode::Transcoding(if format.is_audio_only() {
                 ArgumentMode::FirstAudio
             } else {
                 ArgumentMode::TranscodeAll
-            }),
+            })
+        }
         format
             if is_known_output(format)
                 && (!settings.lossless_first || has_stream_setting_changes(settings))
@@ -893,7 +974,9 @@ fn output_path(media: &MediaInfo, settings: &OutputSettings) -> Result<PathBuf, 
     let stem = file_name
         .file_stem()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| MediaError::new("invalid_output_path", "Media file name has no valid stem"))?;
+        .ok_or_else(|| {
+            MediaError::new("invalid_output_path", "Media file name has no valid stem")
+        })?;
     Ok(PathBuf::from(&settings.output_directory)
         .join(format!("{stem}.{}", settings.format.extension())))
 }
@@ -974,9 +1057,8 @@ fn validate_target_settings(
         ));
     }
 
-    let has_video_settings = settings.width.is_some()
-        || settings.height.is_some()
-        || settings.frame_rate.is_some();
+    let has_video_settings =
+        settings.width.is_some() || settings.height.is_some() || settings.frame_rate.is_some();
 
     if has_video_settings && settings.format.is_audio_only() {
         return Err(MediaError::new(
@@ -1026,7 +1108,9 @@ fn validate_numeric_settings(settings: &OutputSettings) -> Result<(), MediaError
     }
     if let Some(sample_rate) = settings.sample_rate_hz {
         if !(1..=MAX_SAMPLE_RATE_HZ).contains(&sample_rate) {
-            return Err(invalid_setting("sample rate must be between 1 and 768000 Hz"));
+            return Err(invalid_setting(
+                "sample rate must be between 1 and 768000 Hz",
+            ));
         }
     }
     if let Some(channels) = settings.channels {
@@ -1036,7 +1120,9 @@ fn validate_numeric_settings(settings: &OutputSettings) -> Result<(), MediaError
     }
     if let Some(bitrate) = settings.bitrate_kbps {
         if !(1..=MAX_BITRATE_KBPS).contains(&bitrate) {
-            return Err(invalid_setting("bitrate must be between 1 and 1000000 kbps"));
+            return Err(invalid_setting(
+                "bitrate must be between 1 and 1000000 kbps",
+            ));
         }
     }
     if let Some(frame_rate) = &settings.frame_rate {
@@ -1044,9 +1130,15 @@ fn validate_numeric_settings(settings: &OutputSettings) -> Result<(), MediaError
             if denominator.contains('/') {
                 None
             } else {
-                match (numerator.parse::<f64>().ok(), denominator.parse::<f64>().ok()) {
+                match (
+                    numerator.parse::<f64>().ok(),
+                    denominator.parse::<f64>().ok(),
+                ) {
                     (Some(numerator), Some(denominator))
-                        if numerator > 0.0 && denominator > 0.0 => Some(numerator / denominator),
+                        if numerator > 0.0 && denominator > 0.0 =>
+                    {
+                        Some(numerator / denominator)
+                    }
                     _ => None,
                 }
             }
@@ -1114,7 +1206,10 @@ fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
     match format {
         OutputFormat::Mp4 | OutputFormat::Mov => {
             !media.video_streams.is_empty()
-                && media.video_streams.iter().all(|stream| stream.codec == "h264")
+                && media
+                    .video_streams
+                    .iter()
+                    .all(|stream| stream.codec == "h264")
                 && !media.audio_streams.is_empty()
                 && media
                     .audio_streams
@@ -1173,13 +1268,19 @@ fn streams_fit_container(media: &MediaInfo, format: &OutputFormat) -> bool {
             media.video_streams.is_empty()
                 && media.subtitle_streams.is_empty()
                 && !media.audio_streams.is_empty()
-                && media.audio_streams.iter().all(|stream| stream.codec == "flac")
+                && media
+                    .audio_streams
+                    .iter()
+                    .all(|stream| stream.codec == "flac")
         }
         OutputFormat::Mp3 => {
             media.video_streams.is_empty()
                 && media.subtitle_streams.is_empty()
                 && !media.audio_streams.is_empty()
-                && media.audio_streams.iter().all(|stream| stream.codec == "mp3")
+                && media
+                    .audio_streams
+                    .iter()
+                    .all(|stream| stream.codec == "mp3")
         }
         _ => false,
     }
@@ -1280,9 +1381,7 @@ fn can_transcode_to(media: &MediaInfo, format: &OutputFormat) -> bool {
         OutputFormat::Mp4 | OutputFormat::Mov | OutputFormat::Mkv => {
             !has_subtitles && (has_video || has_audio)
         }
-        OutputFormat::M4a | OutputFormat::Wav | OutputFormat::Flac => {
-            !has_subtitles && has_audio
-        }
+        OutputFormat::M4a | OutputFormat::Wav | OutputFormat::Flac => !has_subtitles && has_audio,
         OutputFormat::Mp3 => !has_subtitles && has_audio,
         OutputFormat::Webm | OutputFormat::Avi | OutputFormat::Ogg => false,
     }
@@ -1342,6 +1441,9 @@ impl OutputFormatExt for OutputFormat {
     }
 
     fn is_audio_only(&self) -> bool {
-        matches!(self, Self::Mp3 | Self::M4a | Self::Wav | Self::Flac | Self::Ogg)
+        matches!(
+            self,
+            Self::Mp3 | Self::M4a | Self::Wav | Self::Flac | Self::Ogg
+        )
     }
 }

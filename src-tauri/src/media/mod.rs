@@ -23,7 +23,9 @@ mod tools_contract_tests {
         locator.set_resource_dir(Path::new("/resources"));
 
         assert_eq!(
-            locator.resolve("ffmpeg").expect("bundled path should resolve"),
+            locator
+                .resolve("ffmpeg")
+                .expect("bundled path should resolve"),
             Path::new("/resources")
                 .join("binaries")
                 .join(target_directory())
