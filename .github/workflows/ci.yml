@@ -34,6 +34,8 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Install frontend dependencies
         run: npm ci
@@ -43,6 +45,15 @@ jobs:
 
       - name: Test frontend
         run: npm run test -- --run
+
+      - name: Check Rust formatting
+        # Blocking: rustfmt owns the Rust layout, so a formatting drift fails
+        # the build instead of landing in a review diff.
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+
+      - name: Lint Rust backend
+        # Blocking: `-D warnings` means a new clippy warning fails the build.
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Test Rust backend
         # The real-media integration target is asset-gated and runs in the
@@ -122,6 +133,76 @@ jobs:
               echo ""
               echo "This job is advisory. Do not set it as a required check while it is advisory."
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  rust-test-soak:
+    name: Rust test soak (advisory)
+    # The lib suite was flaky once (ETXTBSY on freshly written fixture
+    # executables, and a scheduler counting race). Those races only show up
+    # under repeated runs and high --test-threads, which the single blocking
+    # `Test Rust backend` run does not exercise. This job hammers the same
+    # suite so a regression reports here instead of blocking a merge.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            unzip
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Soak the Rust lib suite across thread counts
+        id: rust_soak
+        shell: bash
+        run: |
+          set -uo pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
+          runs=0
+          failures=0
+          for threads in 1 16 64 128; do
+            for iteration in 1 2 3 4 5; do
+              runs=$((runs + 1))
+              if ! cargo test --manifest-path src-tauri/Cargo.toml --lib -- \
+                --test-threads="$threads" >/tmp/soak.log 2>&1; then
+                failures=$((failures + 1))
+                echo "::error::soak run failed (threads=${threads}, iteration=${iteration})"
+                tail --lines=40 /tmp/soak.log
+              fi
+            done
+          done
+          echo "runs=${runs}" >>"$GITHUB_OUTPUT"
+          echo "failures=${failures}" >>"$GITHUB_OUTPUT"
+          if [ "$failures" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Report soak result
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Rust test soak (advisory)"
+            echo ""
+            echo "- runs: \`${{ steps.rust_soak.outputs.runs }}\` across thread counts 1, 16, 64, 128"
+            echo "- failures: \`${{ steps.rust_soak.outputs.failures }}\`"
+            echo "- outcome: \`${{ steps.rust_soak.outcome }}\`"
+            echo ""
+            echo "This job is advisory. Do not set it as a required check while it is advisory."
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.rust_soak.outcome }}" != "success" ]; then
+            echo "::warning::Rust test soak failed; merge is not blocked by this job"
           fi
 
   release:
