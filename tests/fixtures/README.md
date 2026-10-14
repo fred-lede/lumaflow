@@ -9,7 +9,7 @@ The committed spec.json is the trust anchor. It defines schema 2, generator
 version 2, exact one-second generation parameters, all ten formats and codec
 arguments, and exact FFmpeg/FFprobe version policy (8.1.2 in this repository).
 It also contains immutable SHA-256 identities for supported release assets.
-The current committed asset table supports `darwin-arm64`; other platforms fail
+The current committed asset table supports `darwin-arm64` and `linux-x64`; other platforms fail
 clearly until their exact release binary digests are committed. A caller may
 select a binary path, but cannot supply or override its expected digest.
 

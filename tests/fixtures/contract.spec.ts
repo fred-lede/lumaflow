@@ -30,6 +30,10 @@ describe("trusted fixture contract", () => {
         },
       },
     });
+    expect(Object.keys(spec.ffmpeg.assets).sort()).toEqual(["darwin-arm64", "linux-x64"]);
+    expect(Object.keys(spec.ffprobe.assets).sort()).toEqual(["darwin-arm64", "linux-x64"]);
+    expect(spec.ffmpeg.assets["linux-x64"]).toEqual({ sha256: "90864f57b2572877d4fe9ecd1c0ec25539b4d1982286cd7522f92c3985e0d9fe" });
+    expect(spec.ffprobe.assets["linux-x64"]).toEqual({ sha256: "9fe8a3656406520d5fab158f1a2a04fb6c758063793a29a391fee4760d23d4ba" });
     expect(spec.generation.fixtures.map((fixture) => fixture.name)).toEqual([
       "sample.mp4",
       "sample.mov",

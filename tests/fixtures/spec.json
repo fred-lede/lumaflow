@@ -15,6 +15,9 @@
     "assets": {
       "darwin-arm64": {
         "sha256": "1332dc2de372bade9a8a63da0d6cdfab9de97fcefbae707bcc0b0506e1203327"
+      },
+      "linux-x64": {
+        "sha256": "90864f57b2572877d4fe9ecd1c0ec25539b4d1982286cd7522f92c3985e0d9fe"
       }
     }
   },
@@ -24,6 +27,9 @@
     "assets": {
       "darwin-arm64": {
         "sha256": "4322275c1c2ac6ba15c695b288788bc1204e75211b3d5c030e5812c82a6dff73"
+      },
+      "linux-x64": {
+        "sha256": "9fe8a3656406520d5fab158f1a2a04fb6c758063793a29a391fee4760d23d4ba"
       }
     }
   },

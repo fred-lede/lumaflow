@@ -118,7 +118,9 @@ release asset is an intentional hard failure, not permission to fall back to
 `ffmpeg` or `ffprobe` from `PATH`.
 
 The real-media Rust integration test is intentionally asset-gated. Run it only
-after generating the trusted fixtures with the matching macOS ARM test assets:
+after generating the trusted fixtures with the matching macOS ARM / Linux x64
+test assets. Non-whitelisted platforms are explicitly refused with an error
+message rather than silently accepted.
 
 ```sh
 LUMAFLOW_FFMPEG_TEST_BIN=/absolute/path/to/ffmpeg \
