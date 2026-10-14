@@ -145,7 +145,7 @@ jobs:
           work="${RUNNER_TEMP}/lumaflow-ffmpeg"
           rm -rf "$work"
           mkdir -p "$work"
-          unzip -q "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}" -d "$work"
+          unzip -q "src-tauri/binaries/${{ matrix.archive_file }}" -d "$work"
           ffmpeg_path="$(find "$work" -type f -name ffmpeg -print -quit)"
           ffprobe_path="$(find "$work" -type f -name ffprobe -print -quit)"
           test -n "$ffmpeg_path" && test -n "$ffprobe_path"
@@ -163,7 +163,7 @@ jobs:
         run: |
           $work = Join-Path $env:RUNNER_TEMP "lumaflow-ffmpeg"
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $work
-          Expand-Archive -Path "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}" -DestinationPath $work
+          Expand-Archive -Path "src-tauri/binaries/${{ matrix.archive_file }}" -DestinationPath $work
           $ffmpeg = Get-ChildItem -Path $work -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $ffprobe = Get-ChildItem -Path $work -Recurse -Filter ffprobe.exe | Select-Object -First 1
           if ($null -eq $ffmpeg -or $null -eq $ffprobe) { throw "FFmpeg or FFprobe executable is absent from the release archive" }
@@ -210,7 +210,7 @@ jobs:
 
       - name: Remove source archive before packaging
         shell: bash
-        run: rm "src-tauri/binaries/${{ matrix.target }}/${{ matrix.archive_file }}"
+        run: rm "src-tauri/binaries/${{ matrix.archive_file }}"
 
       - name: Build release bundle
         shell: bash
