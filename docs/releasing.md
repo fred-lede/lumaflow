@@ -127,3 +127,21 @@ LUMAFLOW_FFMPEG_TEST_BIN=/absolute/path/to/ffmpeg \
 LUMAFLOW_FFPROBE_TEST_BIN=/absolute/path/to/ffprobe \
 cargo test --manifest-path src-tauri/Cargo.toml --test real_media_fixtures
 ```
+
+## real-media advisory policy
+
+The `real-media` job in the CI workflow is advisory. A failure reds the job,
+writes a workflow warning, and appends to the step summary, but the workflow
+stays green and the merge is not blocked.
+
+While the job is advisory, never mark `Real-media boundary (advisory)` as a
+required check. Branch protection evaluates the job's check conclusion
+directly, so a red advisory job would block merges even though the workflow
+result itself is green.
+
+Promotion rule: after ten consecutive green runs on `main`, remove
+`continue-on-error: true` from the job and mark it required. Until then, a red
+real-media run is handled with fix-or-file discipline: fix the underlying
+failure, or open an issue that records why it stays red. If the red light comes
+from an assertion that is too narrow rather than a real defect, widening the
+assertion requires a written rationale in the commit message.
