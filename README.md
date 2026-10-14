@@ -40,9 +40,13 @@ npm run tauri dev
 ```sh
 npm run typecheck
 npm test -- --run
+cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run check:licenses
 ```
+
+這幾條與 CI 的 `check` job 相同，都是擋合併的閘門。
 
 真實媒體層（real-media fixtures 與 E2E）需要 pin 資產與現場生成的 fixtures，白名單為
 `darwin-arm64` 與 `linux-x64`；CI 裡這層目前是警報，不擋合併：
