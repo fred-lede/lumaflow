@@ -117,14 +117,14 @@ node --experimental-strip-types scripts/check-third-party-licenses.ts --source-o
 `cargo fmt --manifest-path src-tauri/Cargo.toml --all` 重排即可。
 
 CI 另有一個警報性質的 `rust-test-soak` job：它先把 Rust lib 測試編成一支測試 binary，再直接
-重跑 200 輪，依序用 `--test-threads` 1、16、64、128 各 50 輪，用來抓單次執行不會重現的競態。
+重跑 400 輪，依序用 `--test-threads` 1、16、64、128 各 100 輪，用來抓單次執行不會重現的競態。
 本地要重現：
 
 ~~~sh
 cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
 binary="$PWD/src-tauri/target/debug/deps/$(ls -t src-tauri/target/debug/deps | grep '^lumaflow_lib-' | head -n1)"
 for threads in 1 16 64 128; do
-  for iteration in $(seq 1 50); do
+  for iteration in $(seq 1 100); do
     (cd src-tauri && "$binary" --test-threads="$threads" >/dev/null) || echo "FAIL threads=$threads iteration=$iteration"
   done
 done

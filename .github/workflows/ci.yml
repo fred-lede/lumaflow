@@ -207,7 +207,7 @@ jobs:
           # the job timeout, which it does not.
           deadline=$((SECONDS + 600))
           for threads in 1 16 64 128; do
-            for iteration in $(seq 1 50); do
+            for iteration in $(seq 1 100); do
               if [ "$SECONDS" -ge "$deadline" ]; then
                 truncated=1
                 echo "::error::soak budget exhausted after ${runs} runs (threads=${threads})"

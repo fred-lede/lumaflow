@@ -425,6 +425,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
 
     use crate::domain::job::{JobEvent, JobState, ProcessingKind, QueueJob};
@@ -444,21 +445,62 @@ mod tests {
         directory
     }
 
-    // A freshly written executable can still be mid-writeback when the runner execs it,
-    // which makes `Command::spawn` fail with ETXTBSY ("Text file busy", os error 26)
-    // once the suite runs on parallel test threads. Flushing the fixture before it is
-    // spawned closes that window.
-    fn sync_before_exec(path: &Path) {
-        let handle = fs::File::open(path).expect("fixture path should be readable");
-        handle.sync_all().expect("fixture path should be durable");
+    // A freshly written executable is not immediately safe to exec. `close()` returns
+    // before the kernel has finished releasing the write handle (the final `__fput` is
+    // deferred), so the first `execve` of that inode can fail with ETXTBSY ("Text file
+    // busy", os error 26) once the suite runs on parallel test threads. Measured on this
+    // box at 128 threads x 300 iterations (38,400 execs of a freshly written fixture), the
+    // rate depends on the shape of the write -> exec window and not on syncing it: 83% when
+    // a write handle is fsync-ed and released immediately before the exec, ~18% with only a
+    // chmod in between, ~1% when a read-open plus fsync sits in between, and 0% when the
+    // fixture is primed with one harmless exec first. Syncing lowers the rate at best and
+    // raises it at worst; only a successful exec proves the kernel is done with the write
+    // handle, so the fixture is primed before the runner is allowed to spawn it.
+    const ETXTBSY: i32 = 26;
+    const PRIME_ARGUMENT: &str = "--prime";
+
+    fn prime_before_exec(path: &Path) {
+        let mut delay = std::time::Duration::from_micros(100);
+        for _ in 0..24 {
+            match Command::new(path)
+                .arg(PRIME_ARGUMENT)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    let status = child.wait().expect("primed fixture should be waitable");
+                    assert!(
+                        status.success(),
+                        "the priming guard in {path:?} should exit successfully"
+                    );
+                    return;
+                }
+                Err(error) if error.raw_os_error() == Some(ETXTBSY) => {
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("fixture {path:?} should be spawnable: {error}"),
+            }
+        }
+        panic!("fixture {path:?} stayed busy after priming");
     }
 
     fn fake_program(directory: &Path, body: &str) -> PathBuf {
         let path = directory.join("fake-ffmpeg.sh");
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("fake program should be writable");
+        // The guard matches the priming call only: priming passes `--prime` as its single
+        // argument, while the runner always spawns with `-i` first and several arguments.
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = {PRIME_ARGUMENT} ] && [ \"$#\" -eq 1 ]; then exit 0; fi\n{body}\n"
+            ),
+        )
+        .expect("fake program should be writable");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
             .expect("fake program should be executable");
-        sync_before_exec(&path);
+        prime_before_exec(&path);
         path
     }
 
@@ -605,7 +647,11 @@ mod tests {
             .run(execution, CancellationToken::new(), Arc::new(|_| {}))
             .expect_err("fake FFmpeg should fail");
 
-        assert_eq!(error.code, "ffmpeg_failed");
+        assert_eq!(
+            error.code, "ffmpeg_failed",
+            "error details: {:?}",
+            error.details
+        );
         assert!(error
             .details
             .expect("stderr should be preserved")
@@ -653,7 +699,11 @@ mod tests {
             .expect("runner thread should join")
             .expect_err("run should cancel");
 
-        assert_eq!(error.code, "cancelled");
+        assert_eq!(
+            error.code, "cancelled",
+            "error details: {:?}",
+            error.details
+        );
         assert!(!output.exists());
         assert_eq!(
             fs::read_dir(&directory)
@@ -679,7 +729,11 @@ mod tests {
             .run(execution, CancellationToken::new(), Arc::new(|_| {}))
             .expect_err("existing destination should be rejected");
 
-        assert_eq!(error.code, "destination_exists");
+        assert_eq!(
+            error.code, "destination_exists",
+            "error details: {:?}",
+            error.details
+        );
         assert_eq!(
             fs::read(output).expect("existing output should remain"),
             b"original"
@@ -766,7 +820,11 @@ mod tests {
             .run(execution, CancellationToken::new(), Arc::new(|_| {}))
             .expect_err("invalid progress output should fail");
 
-        assert_eq!(error.code, "ffmpeg_output_failed");
+        assert_eq!(
+            error.code, "ffmpeg_output_failed",
+            "error details: {:?}",
+            error.details
+        );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
 
@@ -779,7 +837,11 @@ mod tests {
             .run(execution, CancellationToken::new(), Arc::new(|_| {}))
             .expect_err("fake FFmpeg should fail");
 
-        assert_eq!(error.code, "ffmpeg_failed");
+        assert_eq!(
+            error.code, "ffmpeg_failed",
+            "error details: {:?}",
+            error.details
+        );
         assert!(error.details.expect("stderr should be retained").len() <= MAX_STDERR_BYTES);
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
