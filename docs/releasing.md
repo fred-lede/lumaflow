@@ -161,6 +161,34 @@ reformat separately from any semantic change. A new clippy warning is fixed in
 the code; suppressing one in place requires a written rationale in the commit
 message.
 
+## Rust MSRV gate
+
+`src-tauri/Cargo.toml` declares `rust-version`. The `msrv` job reads that value out of the file,
+installs exactly that toolchain with rustup, and runs `cargo check --manifest-path
+src-tauri/Cargo.toml --locked --all-targets` with it. Reading the version from the manifest is
+what keeps the declaration and the gate from drifting apart. It is a blocking gate: the compile
+either succeeds or it does not, so it gates merges directly the way fmt and clippy do.
+
+The declared number is a measurement of the committed `Cargo.lock`, not a preference. It is the
+highest `rust-version` declared by any package in the graph (1.88.0 today: `time`, `plist`,
+`darling`, `serde_with_macros`), floored further by edition 2024 packages, which need Cargo 1.85
+or newer. `--locked` is what makes the gate reproducible: it builds the committed dependency
+graph rather than whatever a fresh resolve would pick today.
+
+When this job goes red, the fix is chosen by which side moved:
+
+- Our own code used a std API newer than the declared MSRV. Fix the code so it builds on the
+  declared version; this is the case the gate exists for.
+- A dependency bump raised the real floor. Cargo names the offending packages
+  (`darling@0.23.0 requires rustc 1.88.0`). Raise `rust-version` to the measured floor, or pin
+  the dependency that moved, and record the measurement in the commit message.
+- Never lower the declared number to make the job pass, and do not convert this job to advisory:
+  a floor that nothing builds against is exactly the drift this gate was added to catch.
+
+To re-measure the floor: `cargo metadata --locked --format-version 1` and take the maximum
+`rust_version` across `packages`, then confirm with `cargo +<that version> check --locked
+--all-targets`.
+
 ## Rust test soak advisory policy
 
 The `rust-test-soak` job runs the Rust lib suite 400 times: it builds the test

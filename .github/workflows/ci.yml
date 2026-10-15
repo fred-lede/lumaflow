@@ -70,6 +70,53 @@ jobs:
       - name: Build Tauri package smoke test
         run: npm exec -- tauri build --debug --bundles deb
 
+  msrv:
+    name: Rust MSRV gate
+    # Blocking: the crate must compile with the exact toolchain version declared
+    # as `rust-version` in src-tauri/Cargo.toml. The version is read from that
+    # file, so the declaration and the gate cannot drift apart. Deterministic by
+    # construction, so it gates merges directly like fmt/clippy instead of
+    # starting out advisory.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            unzip
+
+      - name: Install the declared MSRV toolchain
+        id: msrv
+        shell: bash
+        run: |
+          set -euo pipefail
+          msrv="$(sed -n 's/^rust-version = "\([^"]*\)"$/\1/p' src-tauri/Cargo.toml)"
+          if [ -z "$msrv" ]; then
+            echo "::error::src-tauri/Cargo.toml must declare rust-version for the MSRV gate"
+            exit 1
+          fi
+          echo "Declared MSRV: rustc $msrv"
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          echo "toolchain=$msrv" >>"$GITHUB_OUTPUT"
+
+      - name: Check the crate on the declared MSRV
+        # `--locked` keeps this reproducible: the gate builds the committed
+        # dependency graph, not whatever a fresh resolve would pick today.
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +"${{ steps.msrv.outputs.toolchain }}" check \
+            --manifest-path src-tauri/Cargo.toml --locked --all-targets
+
   real-media:
     name: Real-media boundary (advisory)
     runs-on: ubuntu-22.04

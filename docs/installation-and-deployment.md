@@ -21,7 +21,7 @@ FFmpeg/FFprobe 執行檔不進 Git。`prepare:ffmpeg` 會在本機 `tauri dev/bu
 
 - Node.js 22.6.0 或更新版本
 - npm
-- Rust stable toolchain
+- Rust 1.88.0 或更新版本（用 stable toolchain 即可；1.88.0 是 `src-tauri/Cargo.toml` 的 `rust-version`，也就是這個 lockfile 實測能編過的最低版本）
 - Git
 
 安裝 Rust 建議使用 [rustup](https://rustup.rs/)。Windows 建置需使用 MSVC toolchain：
@@ -29,6 +29,9 @@ FFmpeg/FFprobe 執行檔不進 Git。`prepare:ffmpeg` 會在本機 `tauri dev/bu
 ~~~powershell
 rustup default stable-msvc
 ~~~
+
+本機用 stable 開發即可，但 CI 的 `msrv` job 會用 `Cargo.toml` 宣告的那個版本把整個 crate 編一次，
+所以 code 不能依賴比宣告的 MSRV 更新的 std API。
 
 ### macOS
 
@@ -109,12 +112,19 @@ npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib
+msrv="$(sed -n 's/^rust-version = "\([^"]*\)"$/\1/p' src-tauri/Cargo.toml)"
+cargo +"$msrv" check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only
 ~~~
 
 `npm test` 預設是 watch 模式、不會自己結束，所以要加 `-- --run`。`cargo fmt --check`
 與 `cargo clippy -- -D warnings` 與 CI 的 `check` job 相同，都是擋合併的閘門；格式問題用
 `cargo fmt --manifest-path src-tauri/Cargo.toml --all` 重排即可。
+
+最後那兩行是 CI `msrv` job 的同一個閘門：它從 `Cargo.toml` 讀出宣告的 MSRV，用那個版本的
+toolchain 把 `--all-targets`（含測試）編一次。本地沒裝該 toolchain 時先執行
+`rustup toolchain install "$msrv" --profile minimal`。這個閘門變紅通常是兩件事之一：code 用了
+比宣告還新的 std API，或某個相依升級把真正的 floor 抬高；處理方式見 `docs/releasing.md`。
 
 CI 另有一個警報性質的 `rust-test-soak` job：它先把 Rust lib 測試編成一支測試 binary，再直接
 重跑 400 輪，依序用 `--test-threads` 1、16、64、128 各 100 輪，用來抓單次執行不會重現的競態。
