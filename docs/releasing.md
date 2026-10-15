@@ -163,8 +163,8 @@ message.
 
 ## Rust test soak advisory policy
 
-The `rust-test-soak` job runs the Rust lib suite 200 times: it builds the test
-binary once and then runs it 50 times at each of `--test-threads` 1, 16, 64 and
+The `rust-test-soak` job runs the Rust lib suite 400 times: it builds the test
+binary once and then runs it 100 times at each of `--test-threads` 1, 16, 64 and
 128, under a 10-minute wall-clock budget inside the step. It is advisory: a
 failure turns the job red, writes a workflow warning, and appends the run,
 failure and truncation counts to the step summary, but the workflow stays green
