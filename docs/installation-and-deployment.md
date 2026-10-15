@@ -112,7 +112,7 @@ npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib
-msrv="$(sed -n 's/^rust-version = "\([^"]*\)"$/\1/p' src-tauri/Cargo.toml)"
+msrv="$(sed -nE 's/^[[:space:]]*rust-version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' src-tauri/Cargo.toml | head -n1)"
 cargo +"$msrv" check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only
 ~~~
@@ -123,8 +123,11 @@ node --experimental-strip-types scripts/check-third-party-licenses.ts --source-o
 
 最後那兩行是 CI `msrv` job 的同一個閘門：它從 `Cargo.toml` 讀出宣告的 MSRV，用那個版本的
 toolchain 把 `--all-targets`（含測試）編一次。本地沒裝該 toolchain 時先執行
-`rustup toolchain install "$msrv" --profile minimal`。這個閘門變紅通常是兩件事之一：code 用了
-比宣告還新的 std API，或某個相依升級把真正的 floor 抬高；處理方式見 `docs/releasing.md`。
+`rustup toolchain install "$msrv" --profile minimal`。那兩行是 POSIX shell 寫法；Windows 上
+直接看 `src-tauri/Cargo.toml` 的 `rust-version`，把那個數字放進
+`cargo +<版本> check --manifest-path src-tauri/Cargo.toml --locked --all-targets` 即可。
+這個閘門變紅通常是兩件事之一：code 用了比宣告還新的 std API，或某個相依升級把真正的 floor
+抬高；處理方式見 `docs/releasing.md` 的〈Rust MSRV gate〉。
 
 CI 另有一個警報性質的 `rust-test-soak` job：它先把 Rust lib 測試編成一支測試 binary，再直接
 重跑 400 輪，依序用 `--test-threads` 1、16、64、128 各 100 輪，用來抓單次執行不會重現的競態。

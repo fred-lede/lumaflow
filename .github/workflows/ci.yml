@@ -99,9 +99,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          msrv="$(sed -n 's/^rust-version = "\([^"]*\)"$/\1/p' src-tauri/Cargo.toml)"
-          if [ -z "$msrv" ]; then
-            echo "::error::src-tauri/Cargo.toml must declare rust-version for the MSRV gate"
+          manifest=src-tauri/Cargo.toml
+          # `grep -c` exits 1 when nothing matches, which `set -e` would turn into
+          # an unexplained step failure, so the count is captured before it is judged.
+          count=$(grep -cE '^[[:space:]]*rust-version[[:space:]]*=' "$manifest" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::$manifest must declare rust-version exactly once (found $count)"
+            exit 1
+          fi
+          # Tolerates indentation and a trailing comment; a two-component version
+          # such as 1.88 is a valid MSRV, so the shape check accepts both.
+          msrv="$(sed -nE 's/^[[:space:]]*rust-version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$manifest" | head -n1)"
+          if [[ ! "$msrv" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::rust-version in $manifest must be a plain version such as 1.88.0 (got '$msrv')"
             exit 1
           fi
           echo "Declared MSRV: rustc $msrv"
@@ -110,12 +120,41 @@ jobs:
 
       - name: Check the crate on the declared MSRV
         # `--locked` keeps this reproducible: the gate builds the committed
-        # dependency graph, not whatever a fresh resolve would pick today.
+        # dependency graph, not whatever a fresh resolve would pick today. A
+        # failure here naming the lock file means the Cargo.lock was not committed.
         shell: bash
         run: |
           set -euo pipefail
           cargo +"${{ steps.msrv.outputs.toolchain }}" check \
             --manifest-path src-tauri/Cargo.toml --locked --all-targets
+
+      - name: Report the measured floor next to the declared one
+        # The gate proves the declared floor builds. This reports the other
+        # direction, which nothing else catches: a declaration raised above the
+        # measured floor stays green while restricting contributors for free.
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 --manifest-path src-tauri/Cargo.toml |
+            python3 -c '
+          import json, re, sys
+
+          def key(value):
+              parts = [int(chunk) for chunk in re.findall(r"\d+", value)]
+              while len(parts) < 3:
+                  parts.append(0)
+              return tuple(parts[:3])
+
+          declared = sys.argv[1]
+          packages = json.load(sys.stdin)["packages"]
+          measured = max((p["rust_version"] for p in packages if p.get("rust_version")), key=key, default=None)
+          if measured is None:
+              print(f"::warning::no package in Cargo.lock declares a rust-version, so the declared MSRV {declared} is unmeasured")
+          elif key(declared) > key(measured):
+              print(f"::warning::rust-version {declared} is above the measured floor {measured}; lower it or record why the headroom is wanted")
+          else:
+              print(f"Measured floor: rustc {measured}. Declared: rustc {declared}.")
+          ' "${{ steps.msrv.outputs.toolchain }}"
 
   real-media:
     name: Real-media boundary (advisory)

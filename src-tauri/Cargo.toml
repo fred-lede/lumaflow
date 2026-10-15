@@ -5,10 +5,9 @@ description = "LumaFlow lossless-first media converter"
 authors = ["LumaFlow contributors"]
 license = "MIT"
 edition = "2021"
-# Measured floor of the committed Cargo.lock, not an aspiration: darling@0.23.0,
-# plist@1.10.0, serde_with_macros@3.22.0 and time@0.3.55 all declare rustc 1.88.0,
-# and 23 packages in the graph build with edition 2024 (Cargo >= 1.85). The CI
-# `msrv` job reads this value and compiles the crate with exactly that toolchain.
+# Floor measured from the committed Cargo.lock, not an aspiration. Re-measure it
+# with the recipe in docs/releasing.md ("Rust MSRV gate"); the CI `msrv` job
+# compiles against exactly this version.
 rust-version = "1.88.0"
 
 [lib]

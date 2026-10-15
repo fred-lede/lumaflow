@@ -30,6 +30,8 @@ npm run test -- --run
 cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib
+msrv="$(sed -nE 's/^[[:space:]]*rust-version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' src-tauri/Cargo.toml | head -n1)"
+cargo +"$msrv" check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 node --experimental-strip-types scripts/check-third-party-licenses.ts --source-only
 ```
 
@@ -163,17 +165,39 @@ message.
 
 ## Rust MSRV gate
 
-`src-tauri/Cargo.toml` declares `rust-version`. The `msrv` job reads that value out of the file,
-installs exactly that toolchain with rustup, and runs `cargo check --manifest-path
-src-tauri/Cargo.toml --locked --all-targets` with it. Reading the version from the manifest is
-what keeps the declaration and the gate from drifting apart. It is a blocking gate: the compile
-either succeeds or it does not, so it gates merges directly the way fmt and clippy do.
+`src-tauri/Cargo.toml` declares `rust-version`. The `msrv` job reads that value out of the
+manifest, installs exactly that toolchain with rustup, and compiles every target with it:
 
-The declared number is a measurement of the committed `Cargo.lock`, not a preference. It is the
-highest `rust-version` declared by any package in the graph (1.88.0 today: `time`, `plist`,
-`darling`, `serde_with_macros`), floored further by edition 2024 packages, which need Cargo 1.85
-or newer. `--locked` is what makes the gate reproducible: it builds the committed dependency
-graph rather than whatever a fresh resolve would pick today.
+```sh
+cargo +1.88.0 check --manifest-path src-tauri/Cargo.toml --locked --all-targets
+```
+
+Reading the version from the manifest is what keeps the declaration and the gate from drifting
+apart. `--all-targets` is load-bearing: plain `cargo check` skips `#[cfg(test)]` code entirely,
+so test targets would otherwise never be compiled on the MSRV toolchain. `--locked` makes the
+gate reproducible — it builds the committed dependency graph rather than whatever a fresh
+resolve would pick today — so a failure that names the lock file means a `Cargo.lock` commit is
+missing, not that the MSRV moved.
+
+The gate is deterministic, so it is blocking by design the way fmt and clippy are. Mark
+`Rust MSRV gate` (the job's display name) as a required check, unlike
+`Real-media boundary (advisory)` and `Rust test soak (advisory)`, which must never be required
+while advisory. `main` has no branch protection configured today, so every gate in this
+workflow — `check` included — is currently enforced by review plus green CI rather than by
+GitHub; the required-check list is what turns "blocking" from a policy into a rule.
+
+The declared number is a measurement of the committed `Cargo.lock`, not a preference: it is the
+highest `rust-version` declared by any package in the graph (1.88.0 today). The graph is
+separately bounded below by its edition 2024 packages, which need Cargo 1.85 or newer; that
+bound is subsumed by 1.88.0 today, and becomes the binding floor if the 1.88 packages are ever
+pinned back.
+
+Two limits to know about. The gate builds the Linux target only, so a package that sits in the
+lock graph but never compiles on Linux can raise the measured floor without the gate ever
+exercising it, and a Windows-only MSRV violation is invisible to it. And the gate proves the
+declared floor *compiles*; it does not run the suite on that toolchain, because a blocking job
+stays blocking only while it is deterministic. Runtime drift between the MSRV and current stable
+is caught by the `check` and soak jobs on stable, not here.
 
 When this job goes red, the fix is chosen by which side moved:
 
@@ -185,9 +209,17 @@ When this job goes red, the fix is chosen by which side moved:
 - Never lower the declared number to make the job pass, and do not convert this job to advisory:
   a floor that nothing builds against is exactly the drift this gate was added to catch.
 
-To re-measure the floor: `cargo metadata --locked --format-version 1` and take the maximum
-`rust_version` across `packages`, then confirm with `cargo +<that version> check --locked
---all-targets`.
+The job also prints the measured floor next to the declared one. A `::warning::` saying the
+declaration sits above the measured floor means the manifest restricts contributors for free:
+lower it, or record why the headroom is wanted.
+
+To re-measure the floor, then confirm it by building:
+
+```sh
+cargo metadata --locked --format-version 1 --manifest-path src-tauri/Cargo.toml |
+  jq -r '.packages[].rust_version // empty' | sort -V | tail -1
+cargo +1.88.0 check --manifest-path src-tauri/Cargo.toml --locked --all-targets
+```
 
 ## Rust test soak advisory policy
 

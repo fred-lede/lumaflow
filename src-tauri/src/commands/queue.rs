@@ -762,7 +762,7 @@ mod tests {
             vec![fs::canonicalize(&source)
                 .expect("source should canonicalize")
                 .to_string_lossy()
-                .to_string()]
+                .into_owned()]
         );
         let analyzed = state
             .probe_selected_path(&source.to_string_lossy())
