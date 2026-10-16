@@ -364,6 +364,14 @@ chmod 755 src-tauri/binaries/<target>/ffmpeg src-tauri/binaries/<target>/ffprobe
 
 先確認檔案有執行權限，再檢查 WebKitGTK、AppIndicator、librsvg 與其他 Tauri 系統相依套件。請不要用新發行版建置後直接假設所有舊版 Linux 都能執行。
 
+### 轉檔卡在同一個進度不動
+
+轉檔中的 job 如果連續 120 秒都沒有 FFmpeg progress 輸出，runner 會停止該 FFmpeg 子進程，job 以 `ffmpeg_stalled` 失敗，錯誤訊息會附上當時取得的 FFmpeg stderr（若有）。FFmpeg 關閉 progress 輸出之後（transcode loop 已結束、正在寫輸出尾聲）改由另一個 120 秒的結束期限負責。
+
+兩個期限計算的都是「兩次 progress 輸出之間的沉默」，不是轉檔總時長，所以合法的長轉檔不受影響。本專案 planner 實際產出的 plan（`-c copy` remux、flac／mp3／aac 音訊轉檔、`libx264` 預設 preset 加 `-vf` 的視訊轉檔）實測最大 progress 間距是 0.84 秒。
+
+被停止的轉換不會發布半成品：暫存輸出照既有 `TempOutput` 規則清理，輸出目錄不會出現不完整檔案，可直接用 job 上的 Retry 重試。分析階段的 ffprobe 目前仍沒有期限，這是已記錄的後續工作。
+
 ## 10. 參考資料
 
 - [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
