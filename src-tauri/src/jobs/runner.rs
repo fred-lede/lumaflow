@@ -18,14 +18,24 @@ use super::temp_output::{TempOutput, TempOutputError};
 pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
 /// How long a live FFmpeg child may go without emitting a progress line before the
-/// runner stops it. FFmpeg flushes a `-progress pipe:1` block about every half second
-/// while its transcode loop runs, so a child that has emitted nothing for this long is
-/// blocked (a stalled read, an unresponsive mount) rather than merely slow.
+/// runner stops it. This is a deadline about the progress stream going *silent*, which
+/// is not the same thing as the conversion making no progress.
+///
+/// FFmpeg 8 writes a `-progress pipe:1` block on a wall-clock half-second cadence, so
+/// the silence this catches is a child that never reached its transcode loop (probing a
+/// damaged input, opening the output on a dead mount) or one that is alive and printing
+/// nothing. A child blocked inside its transcode loop - a stalled read, an output it
+/// cannot write to - keeps printing blocks whose `out_time_us` never advances, and is
+/// deliberately left alone: frozen reported time is not evidence enough to kill a
+/// running conversion. Measured with the shipped 8.1.2, blocking the output for 60 s
+/// leaves the progress gap at 0.51 s; the same block on FFmpeg 6.1.1 stretches it to
+/// 60.0 s, because 6 gates progress on the transcode loop instead of a timer.
 pub const PROGRESS_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long a child may take to exit after its progress stream has closed. Closing
 /// stdout means the transcode loop finished and FFmpeg is writing the tail of the
-/// output, which normally completes in well under a second.
+/// output, which with the shipped FFmpeg completes in about a millisecond; this deadline
+/// is pure defence for a child that finalises and then never exits.
 pub const EXIT_GRACE_TIMEOUT: Duration = Duration::from_secs(120);
 
 const PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -64,11 +74,19 @@ impl FfmpegRunner {
 
     /// Overrides the watchdog deadlines. Production builds keep the defaults; tests use
     /// short deadlines so the stall paths are exercised without waiting two minutes.
-    pub fn with_deadlines(
+    /// Test-only, and a deadline short enough to fire between two polls would stop every
+    /// conversion, so nothing outside this crate's tests can ask for one.
+    #[cfg(test)]
+    pub(crate) fn with_deadlines(
         mut self,
         progress_stall_timeout: Duration,
         exit_grace_timeout: Duration,
     ) -> Self {
+        debug_assert!(
+            progress_stall_timeout >= Duration::from_millis(100)
+                && exit_grace_timeout >= Duration::from_millis(100),
+            "a watchdog deadline below 100 ms would fire between two polls of a healthy child"
+        );
         self.progress_stall_timeout = progress_stall_timeout;
         self.exit_grace_timeout = exit_grace_timeout;
         self
@@ -464,6 +482,13 @@ enum Stall {
     NoExit(Duration),
 }
 
+/// Stops a child the watchdog decided is stuck, and builds the failure the job reports.
+///
+/// Both joins terminate because `stop_child` killed the process we spawned and FFmpeg
+/// does not fork, so killing it closes the pipes its reader threads are blocked on. A
+/// child that left a grandchild holding the stdout write end open would keep
+/// `progress_thread.join()` blocked here; that assumption belongs to FFmpeg being a leaf
+/// process, not to this runner.
 fn stalled_error(
     child: &mut std::process::Child,
     progress_thread: thread::JoinHandle<()>,
