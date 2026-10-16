@@ -5,7 +5,10 @@ description = "LumaFlow lossless-first media converter"
 authors = ["LumaFlow contributors"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77.2"
+# Floor measured from the committed Cargo.lock, not an aspiration. Re-measure it
+# with the recipe in docs/releasing.md ("Rust MSRV gate"); the CI `msrv` job
+# compiles against exactly this version.
+rust-version = "1.88.0"
 
 [lib]
 name = "lumaflow_lib"

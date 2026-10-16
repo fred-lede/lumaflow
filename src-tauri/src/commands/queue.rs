@@ -759,7 +759,10 @@ mod tests {
 
         assert_eq!(
             registered,
-            vec![fs::canonicalize(&source).expect("source should canonicalize")]
+            vec![fs::canonicalize(&source)
+                .expect("source should canonicalize")
+                .to_string_lossy()
+                .into_owned()]
         );
         let analyzed = state
             .probe_selected_path(&source.to_string_lossy())
