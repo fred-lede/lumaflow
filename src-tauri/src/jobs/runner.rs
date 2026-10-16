@@ -819,10 +819,11 @@ mod tests {
 
     #[test]
     fn stops_a_child_that_emits_no_progress() {
-        // A shell busy loop is silent and spawns nothing: the runner must stop it
-        // instead of waiting for an exit that never arrives.
+        // `exec` replaces the shell with an idle process, so the child stays silent,
+        // burns no CPU, and is the direct child the runner kills (no orphan holding the
+        // pipes open behind the join).
         let directory = fixture_directory("progress-stall");
-        let program = fake_program(&directory, "while :; do :; done");
+        let program = fake_program(&directory, "exec sleep 30");
         let execution = execution(&directory);
         let output = execution.plan.output_path.clone();
         let error = FfmpegRunner::new(program)
@@ -854,7 +855,7 @@ mod tests {
         let directory = fixture_directory("exit-grace");
         let program = fake_program(
             &directory,
-            "printf 'out_time_us=500000\\nprogress=continue\\n'; exec 1>&-; while :; do :; done",
+            "printf 'out_time_us=500000\\nprogress=continue\\n'; exec 1>&-; exec sleep 30",
         );
         let execution = execution(&directory);
         let output = execution.plan.output_path.clone();
