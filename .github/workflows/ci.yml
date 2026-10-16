@@ -229,7 +229,7 @@ jobs:
     # `Test Rust backend` run does not exercise. This job hammers the same
     # suite so a regression reports here instead of blocking a merge.
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     continue-on-error: true
 
     steps:
@@ -291,7 +291,14 @@ jobs:
           # A wall-clock budget inside the step: a hung run should fail this
           # step, which `continue-on-error` masks, rather than be cancelled by
           # the job timeout, which it does not.
-          deadline=$((SECONDS + 600))
+          #
+          # Calibrated to the suite's real per-run cost, measured on this job:
+          # the watchdog tests wait out deliberately short deadlines, so one
+          # full-suite run costs ~3.6 s at --test-threads=1 and ~1.4 s at the
+          # higher counts (0.15 s and 0.05 s before those tests existed).
+          # 400 runs therefore need ~890 s here; 1100 s leaves room for runner
+          # variance without approaching the 25-minute job timeout.
+          deadline=$((SECONDS + 1100))
           for threads in 1 16 64 128; do
             for iteration in $(seq 1 100); do
               if [ "$SECONDS" -ge "$deadline" ]; then
