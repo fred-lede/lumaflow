@@ -225,10 +225,19 @@ cargo +1.88.0 check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 
 The `rust-test-soak` job runs the Rust lib suite 400 times: it builds the test
 binary once and then runs it 100 times at each of `--test-threads` 1, 16, 64 and
-128, under a 10-minute wall-clock budget inside the step. It is advisory: a
+128, under an 1100-second wall-clock budget inside the step (25-minute job
+timeout). The budget is calibrated to the suite's measured per-run cost rather
+than to a round number: the stall-watchdog tests wait out deliberately short
+deadlines, which makes one full-suite run cost about 3.6 s at
+`--test-threads=1` and about 1.4 s at the higher counts. It is advisory: a
 failure turns the job red, writes a workflow warning, and appends the run,
 failure and truncation counts to the step summary, but the workflow stays green
 and the merge is not blocked.
+
+A `budget exhausted` result is not a test failure and must not be read as one.
+It means the suite got slower than the budget, and the fix is to raise the
+budget (or the job timeout), not to shorten the tests' margins: those margins
+are what keep the soak from becoming the flake it exists to detect.
 
 While the job is advisory, never mark `Rust test soak (advisory)` as a required
 check, for the same reason as the real-media job: branch protection evaluates
