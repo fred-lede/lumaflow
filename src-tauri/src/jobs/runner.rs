@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::domain::job::{JobError, JobEvent};
 use crate::media::tools::ToolLocator;
@@ -17,8 +17,23 @@ use super::temp_output::{TempOutput, TempOutputError};
 
 pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
+/// How long a live FFmpeg child may go without emitting a progress line before the
+/// runner stops it. FFmpeg flushes a `-progress pipe:1` block about every half second
+/// while its transcode loop runs, so a child that has emitted nothing for this long is
+/// blocked (a stalled read, an unresponsive mount) rather than merely slow.
+pub const PROGRESS_STALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a child may take to exit after its progress stream has closed. Closing
+/// stdout means the transcode loop finished and FFmpeg is writing the tail of the
+/// output, which normally completes in well under a second.
+pub const EXIT_GRACE_TIMEOUT: Duration = Duration::from_secs(120);
+
+const PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 pub struct FfmpegRunner {
     program: RunnerProgram,
+    progress_stall_timeout: Duration,
+    exit_grace_timeout: Duration,
 }
 
 enum RunnerProgram {
@@ -30,6 +45,8 @@ impl FfmpegRunner {
     pub fn new(program: impl Into<OsString>) -> Self {
         Self {
             program: RunnerProgram::Fixed(program.into()),
+            progress_stall_timeout: PROGRESS_STALL_TIMEOUT,
+            exit_grace_timeout: EXIT_GRACE_TIMEOUT,
         }
     }
 
@@ -40,7 +57,21 @@ impl FfmpegRunner {
     pub fn with_tools(tools: ToolLocator) -> Self {
         Self {
             program: RunnerProgram::Located(tools),
+            progress_stall_timeout: PROGRESS_STALL_TIMEOUT,
+            exit_grace_timeout: EXIT_GRACE_TIMEOUT,
         }
+    }
+
+    /// Overrides the watchdog deadlines. Production builds keep the defaults; tests use
+    /// short deadlines so the stall paths are exercised without waiting two minutes.
+    pub fn with_deadlines(
+        mut self,
+        progress_stall_timeout: Duration,
+        exit_grace_timeout: Duration,
+    ) -> Self {
+        self.progress_stall_timeout = progress_stall_timeout;
+        self.exit_grace_timeout = exit_grace_timeout;
+        self
     }
 
     fn program(&self) -> Result<OsString, JobError> {
@@ -152,6 +183,8 @@ impl FfmpegRunner {
         let stderr_thread = thread::spawn(move || read_stderr(stderr));
 
         let mut parser = ProgressParser::new(execution.job.media.duration_seconds);
+        let mut last_activity = Instant::now();
+        let mut progress_open = true;
         let status = loop {
             if cancellation.is_cancelled() {
                 stop_child(&mut child);
@@ -162,8 +195,11 @@ impl FfmpegRunner {
 
             match child.try_wait() {
                 Ok(Some(status)) => break status,
-                Ok(None) => match progress_rx.recv_timeout(Duration::from_millis(25)) {
-                    Ok(Ok(line)) => emit_progress(&execution.job.id, &mut parser, &line, &emit),
+                Ok(None) => match progress_rx.recv_timeout(PROGRESS_POLL_INTERVAL) {
+                    Ok(Ok(line)) => {
+                        last_activity = Instant::now();
+                        emit_progress(&execution.job.id, &mut parser, &line, &emit);
+                    }
                     Ok(Err(error)) => {
                         stop_child(&mut child);
                         let _ = progress_thread.join();
@@ -174,8 +210,38 @@ impl FfmpegRunner {
                             error,
                         ));
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {}
+                    // A disconnected channel never answers with Timeout, so reaching this
+                    // arm means the progress stream is still open and simply silent.
+                    Err(RecvTimeoutError::Timeout) => {
+                        if last_activity.elapsed() >= self.progress_stall_timeout {
+                            return Err(stalled_error(
+                                &mut child,
+                                progress_thread,
+                                stderr_thread,
+                                Stall::NoProgress(self.progress_stall_timeout),
+                            ));
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        if progress_open {
+                            // The reader reached EOF, so the transcode loop is over and
+                            // the child is writing the tail of the output.
+                            progress_open = false;
+                            last_activity = Instant::now();
+                        } else {
+                            // A disconnected channel answers immediately, so this poll
+                            // has to pace itself while it waits for the exit.
+                            thread::sleep(PROGRESS_POLL_INTERVAL);
+                            if last_activity.elapsed() >= self.exit_grace_timeout {
+                                return Err(stalled_error(
+                                    &mut child,
+                                    progress_thread,
+                                    stderr_thread,
+                                    Stall::NoExit(self.exit_grace_timeout),
+                                ));
+                            }
+                        }
+                    }
                 },
                 Err(error) => {
                     stop_child(&mut child);
@@ -393,6 +459,41 @@ fn invalid_arguments_error(message: &str) -> JobError {
     }
 }
 
+enum Stall {
+    NoProgress(Duration),
+    NoExit(Duration),
+}
+
+fn stalled_error(
+    child: &mut std::process::Child,
+    progress_thread: thread::JoinHandle<()>,
+    stderr_thread: thread::JoinHandle<io::Result<String>>,
+    stall: Stall,
+) -> JobError {
+    stop_child(child);
+    let _ = progress_thread.join();
+    let stderr = stderr_thread
+        .join()
+        .ok()
+        .and_then(|result| result.ok())
+        .unwrap_or_default();
+    let message = match stall {
+        Stall::NoProgress(timeout) => format!(
+            "FFmpeg produced no progress output for {} seconds and was stopped",
+            timeout.as_secs()
+        ),
+        Stall::NoExit(timeout) => format!(
+            "FFmpeg did not finish writing its output within {} seconds of its last progress update and was stopped",
+            timeout.as_secs()
+        ),
+    };
+    JobError {
+        code: "ffmpeg_stalled".to_owned(),
+        message,
+        details: nonempty_details(&stderr),
+    }
+}
+
 fn stop_child(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -431,6 +532,8 @@ mod tests {
     use crate::domain::job::{JobEvent, JobState, ProcessingKind, QueueJob};
     use crate::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
     use crate::media::planner::ConversionPlan;
+
+    use std::time::Duration;
 
     use super::{CancellationToken, FfmpegRunner, JobExecution, MAX_STDERR_BYTES};
 
@@ -710,6 +813,92 @@ mod tests {
                 .expect("fixture should be readable")
                 .count(),
             2
+        );
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn stops_a_child_that_emits_no_progress() {
+        // A shell busy loop is silent and spawns nothing: the runner must stop it
+        // instead of waiting for an exit that never arrives.
+        let directory = fixture_directory("progress-stall");
+        let program = fake_program(&directory, "while :; do :; done");
+        let execution = execution(&directory);
+        let output = execution.plan.output_path.clone();
+        let error = FfmpegRunner::new(program)
+            .with_deadlines(Duration::from_secs(1), Duration::from_secs(10))
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("a silent FFmpeg should be stopped");
+
+        assert_eq!(
+            error.code, "ffmpeg_stalled",
+            "error details: {:?}",
+            error.details
+        );
+        assert!(error.message.contains("no progress"), "error: {error:?}");
+        assert!(!output.exists(), "a stalled run must not publish output");
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture should be readable")
+                .count(),
+            2
+        );
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn stops_a_child_that_never_exits_after_progress_output_ends() {
+        // Closing stdout means the transcode loop finished, so the stall deadline no
+        // longer applies; the exit grace is what has to stop a child that finalises
+        // forever.
+        let directory = fixture_directory("exit-grace");
+        let program = fake_program(
+            &directory,
+            "printf 'out_time_us=500000\\nprogress=continue\\n'; exec 1>&-; while :; do :; done",
+        );
+        let execution = execution(&directory);
+        let output = execution.plan.output_path.clone();
+        let error = FfmpegRunner::new(program)
+            .with_deadlines(Duration::from_secs(5), Duration::from_secs(1))
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect_err("a child that never exits should be stopped");
+
+        assert_eq!(
+            error.code, "ffmpeg_stalled",
+            "error details: {:?}",
+            error.details
+        );
+        assert!(error.message.contains("finish writing"), "error: {error:?}");
+        assert!(!output.exists(), "a stalled run must not publish output");
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture should be readable")
+                .count(),
+            2
+        );
+        fs::remove_dir_all(directory).expect("runner fixture should be removable");
+    }
+
+    #[test]
+    fn keeps_a_child_that_keeps_emitting_progress() {
+        // Seven 0.2 s gaps run past the 1 s stall deadline in total, so this proves
+        // the watchdog measures silence between progress lines and not the wall clock.
+        let directory = fixture_directory("steady-progress");
+        let program = fake_program(
+            &directory,
+            "out=\"\"; for arg in \"$@\"; do out=\"$arg\"; done; for i in 1 2 3 4 5 6 7; do printf 'out_time_us=%s\\nprogress=continue\\n' $((i * 200000)); sleep 0.2; done; printf 'progress=end\\n'; printf 'converted' > \"$out\"",
+        );
+        let execution = execution(&directory);
+        let output = execution.plan.output_path.clone();
+
+        FfmpegRunner::new(program)
+            .with_deadlines(Duration::from_secs(1), Duration::from_secs(10))
+            .run(execution, CancellationToken::new(), Arc::new(|_| {}))
+            .expect("a child that keeps emitting progress must not be stopped");
+
+        assert_eq!(
+            fs::read(output).expect("final output should exist"),
+            b"converted"
         );
         fs::remove_dir_all(directory).expect("runner fixture should be removable");
     }
