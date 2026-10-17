@@ -225,11 +225,13 @@ cargo +1.88.0 check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 
 The `rust-test-soak` job runs the Rust lib suite 400 times: it builds the test
 binary once and then runs it 100 times at each of `--test-threads` 1, 16, 64 and
-128, under an 1100-second wall-clock budget inside the step (25-minute job
+128, under a 1450-second wall-clock budget inside the step (30-minute job
 timeout). The budget is calibrated to the suite's measured per-run cost rather
 than to a round number: the stall-watchdog tests wait out deliberately short
-deadlines, which makes one full-suite run cost about 3.6 s at
-`--test-threads=1` and about 1.4 s at the higher counts. It is advisory: a
+deadlines, which makes one full-suite run cost about 7.2 s at
+`--test-threads=1` and about 1.4 s at the higher counts (measured locally, so
+a shared runner is expected to be slower; the 400 runs project to about
+1140 s). It is advisory: a
 failure turns the job red, writes a workflow warning, and appends the run,
 failure and truncation counts to the step summary, but the workflow stays green
 and the merge is not blocked.
