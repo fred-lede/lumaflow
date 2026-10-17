@@ -851,3 +851,88 @@ mod tests {
         assert_eq!(error.details.as_deref(), Some("No such file"));
     }
 }
+
+#[cfg(all(test, unix))]
+mod process_runner_tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::{CommandRunner, ProcessCommandRunner};
+    use crate::media::tools::{target_directory, ToolLocator};
+
+    // A script written and then immediately exec'd can hit ETXTBSY: the loader still
+    // holds the file open while the kernel refuses to map it as a program. The guard
+    // line lets each fixture be primed with one harmless exec first. Same race and the
+    // same remedy as the fixture helper in src-tauri/src/jobs/runner.rs's tests.
+    const PRIME_ARGUMENT: &str = "--prime";
+    const ETXTBSY: i32 = 26;
+
+    fn fixture_directory(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("lumaflow-probe-{name}-{}", std::process::id()));
+        // A panicking test leaves its fixture directory behind, and a later run that
+        // reuses the same PID would inherit those files, so each test starts empty.
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("probe test directory should be creatable");
+        directory
+    }
+
+    fn prime_before_exec(path: &Path) {
+        for _ in 0..10 {
+            match Command::new(path).arg(PRIME_ARGUMENT).status() {
+                Ok(_) => return,
+                Err(error) if error.raw_os_error() == Some(ETXTBSY) => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("fixture should be executable: {error}"),
+            }
+        }
+        panic!("fixture stayed unexecutable: {}", path.display());
+    }
+
+    /// Writes a POSIX-sh fixture tool exactly where `ToolLocator` looks for it.
+    fn fake_tool(directory: &Path, tool: &str, body: &str) -> PathBuf {
+        let bin_directory = directory.join("binaries").join(target_directory());
+        fs::create_dir_all(&bin_directory).expect("fixture binary directory should be creatable");
+        let path = bin_directory.join(tool);
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = {PRIME_ARGUMENT} ] && [ \"$#\" -eq 1 ]; then exit 0; fi\n{body}\n"
+            ),
+        )
+        .expect("fixture tool should be writable");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("fixture tool should be chmod-able");
+        prime_before_exec(&path);
+        path
+    }
+
+    fn runner_for(directory: &Path) -> ProcessCommandRunner {
+        let tools = ToolLocator::bundled();
+        tools.set_resource_dir(directory);
+        ProcessCommandRunner::with_tools(tools)
+    }
+
+    #[test]
+    fn captures_stdout_stderr_and_status_from_a_completed_child() {
+        let directory = fixture_directory("output-capture");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            "printf 'probe-json\\n'; printf 'probe-error\\n' >&2; exit 3",
+        );
+        let output = runner_for(&directory)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a completed child should produce a command output");
+
+        assert_eq!(output.status, 3, "the child's exit code must survive");
+        assert_eq!(output.stdout, "probe-json\n");
+        assert_eq!(output.stderr, "probe-error\n");
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+}
