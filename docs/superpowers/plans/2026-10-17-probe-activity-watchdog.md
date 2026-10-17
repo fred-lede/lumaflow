@@ -1013,7 +1013,7 @@ git commit -m "test(media): cover the real FFprobe hang in the advisory layer"
 在 `docs/installation-and-deployment.md` 的「### 轉檔沒有進度輸出時會被中止」條目之後、「## 10. 參考資料」之前新增 `### 探測卡住會被中止`，內容必須涵蓋以下每一點（措辭用 repo docs 的 zh-TW 風格，不要翻成行銷語）：
 
 1. 探測（ffprobe／頻譜分析的 ffmpeg）若連續 **120 秒**既沒有讀取任何 bytes、也沒有燒 CPU，會被停止，job／選檔以 `probe_stalled` 失敗，錯誤訊息附上當時抓到的 FFmpeg stderr（若有）。
-2. 120 秒計算的是「兩次活動之間的空檔」，**不是探測總時長**：真的在讀的探測不會被殺。實測例：一個 moov 在尾端的破碎 MP4 會讓 ffprobe 合法讀 241 MB，1 MiB/s 的來源下這是 230 秒的合法探測，它不會被中止。
+2. 120 秒計算的是「兩次活動之間的空檔」，**不是探測總時長**：真的在讀的探測不會被殺。實測例：一個 269 MB 的 fragmented MP4（18 000 個 fragment）會讓 ffprobe 為了走查每個 fragment 的索引合法讀 241 MB，1 MiB/s 的來源下這是 230 秒的合法探測，它不會被中止。
 3. 活動訊號來自 kernel 的 I/O 與 CPU 計數器（`/proc/<pid>/io` 的 `rchar`／`syscr` 與 `/proc/<pid>/stat` 的 `utime + stime`），三個全部不動且子程序仍活著才殺；讀得慢但有在讀、或輸入已讀完只在解碼運算，都算活動。
 4. 一個卡死的探測最壞是**一個 120 秒窗口**：ffprobe 失敗就不會再跑後面的頻譜分析；頻譜分析被殺則品質判定降為 unknown，探測本身仍然成功。
 5. **平台缺口明文寫出**：活動 watchdog 目前只在 Linux 生效。macOS 沒有 `/proc`，探測沿用沒有上限的等待行為（也就是本條描述的問題在 macOS 上仍存在），這是已記錄的缺口而非已解決的支援。

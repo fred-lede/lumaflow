@@ -295,11 +295,13 @@ jobs:
           # Calibrated to the suite's real per-run cost, measured locally on
           # this branch (a GitHub-hosted runner is typically slower, so the
           # projection is padded): the watchdog tests wait out deliberately
-          # short deadlines, so one full-suite run costs ~7.2 s at
+          # short deadlines, so one full-suite run costs ~5.3 s at
           # --test-threads=1 and ~1.4 s at the higher counts (0.15 s and 0.05 s
-          # before those tests existed). 400 runs therefore project to ~1140 s
-          # here; 1450 s leaves room for runner variance without approaching
-          # the 30-minute job timeout.
+          # before those tests existed). 400 runs therefore project to ~960 s
+          # here; the 1450 s budget was set from the earlier calibration
+          # (~1140 s) and is kept because soak budgets only ever go up, which
+          # also leaves room for runner variance under the 30-minute job
+          # timeout.
           deadline=$((SECONDS + 1450))
           for threads in 1 16 64 128; do
             for iteration in $(seq 1 100); do

@@ -378,7 +378,7 @@ chmod 755 src-tauri/binaries/<target>/ffmpeg src-tauri/binaries/<target>/ffprobe
 
 探測（ffprobe，以及頻譜分析用的 ffmpeg）若連續 120 秒既沒有讀取任何 bytes、也沒有燒 CPU，會被停止，job／選檔以 `probe_stalled` 失敗，錯誤訊息會附上當時取得的 FFmpeg stderr（若有）。
 
-120 秒計算的是「兩次活動之間的空檔」，**不是探測總時長**，所以真的在讀的探測不會被殺。實測一個 moov 在尾端的破碎 MP4，ffprobe 會合法讀到 241 MB；在 1 MiB/s 的來源下這是 230 秒的合法探測，它不會被中止。
+120 秒計算的是「兩次活動之間的空檔」，**不是探測總時長**，所以真的在讀的探測不會被殺。實測一個 269 MB 的 fragmented MP4（18 000 個 fragment），ffprobe 為了走查每個 fragment 的索引會合法讀到 241 MB；在 1 MiB/s 的來源下這是 230 秒的合法探測，它不會被中止。
 
 活動訊號來自 kernel 的 I/O 與 CPU 計數器：`/proc/<pid>/io` 的 `rchar`／`syscr`，以及 `/proc/<pid>/stat` 的 `utime + stime`。三個計數器全部不動、且子進程仍活著，才會把它停止；讀得慢但有在讀、或輸入已讀完只剩解碼運算，都算活動。
 
