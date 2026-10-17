@@ -390,8 +390,12 @@ git commit -m "feat(media): read the kernel activity counters that separate a pa
 ```rust
     // The injected window and poll interval live here because this is the task that first
     // consumes them: a constant nothing uses yet is a dead-code warning under
-    // `clippy --all-targets -- -D warnings`.
+    // `clippy --all-targets -- -D warnings`. They are Linux-gated for the mirror-image
+    // reason: their only consumers are Linux-gated, so on a macOS build these same two
+    // lines would be the unused constants.
+    #[cfg(target_os = "linux")]
     const STALL_WINDOW: Duration = Duration::from_millis(300);
+    #[cfg(target_os = "linux")]
     const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
     #[cfg(target_os = "linux")]
