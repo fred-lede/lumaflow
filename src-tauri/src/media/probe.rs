@@ -770,6 +770,7 @@ fn invalid_field(field: &str) -> MediaError {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::VecDeque;
 
     use super::*;
     use crate::domain::media::{
@@ -889,6 +890,28 @@ mod tests {
                 stdout: self.stdout.clone(),
                 stderr: self.stderr.clone(),
             })
+        }
+    }
+
+    #[derive(Debug)]
+    struct ScriptedRunner {
+        responses: RefCell<VecDeque<Result<CommandOutput, MediaError>>>,
+    }
+
+    impl ScriptedRunner {
+        fn scripted(responses: Vec<Result<CommandOutput, MediaError>>) -> Self {
+            Self {
+                responses: RefCell::new(responses.into()),
+            }
+        }
+    }
+
+    impl CommandRunner for ScriptedRunner {
+        fn run(&self, _program: &str, _args: &[String]) -> Result<CommandOutput, MediaError> {
+            self.responses
+                .borrow_mut()
+                .pop_front()
+                .expect("scripted runner response")
         }
     }
 
@@ -1113,6 +1136,24 @@ mod tests {
             actual.source_quality.status,
             SourceQualityStatus::LikelyNativeLossless
         );
+    }
+
+    #[test]
+    fn degrades_to_unknown_quality_when_the_spectral_pass_is_stopped() {
+        let actual = probe_media(
+            &ScriptedRunner::scripted(vec![
+                Ok(CommandOutput {
+                    status: 0,
+                    stdout: FLAC_JSON.to_owned(),
+                    stderr: String::new(),
+                }),
+                Err(MediaError::new("probe_stalled", "FFprobe was stopped")),
+            ]),
+            "/input/voice.flac",
+        )
+        .expect("a stopped spectral pass should still probe the file");
+
+        assert_eq!(actual.source_quality.status, SourceQualityStatus::Unknown);
     }
 
     #[test]
