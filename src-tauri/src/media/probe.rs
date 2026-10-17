@@ -208,10 +208,11 @@ impl ProcessCommandRunner {
                     });
                 }
                 Ok(None) => {
+                    // A sample we could not read is not evidence either way: it neither
+                    // refreshes the window nor proves a stall. The watchdog only ever acts
+                    // on counters it actually read, so a child is stopped because its last
+                    // observed activity aged out of the window, never because a read failed.
                     if let Ok(sample) = read_activity_sample(pid) {
-                        // A child we cannot sample is a child we must not kill: the
-                        // watchdog only ever acts on counters it actually read. A failed
-                        // sample neither refreshes the window nor kills the child.
                         if previous
                             .as_ref()
                             .is_some_and(|was| sample.progressed_since(was))
@@ -1259,8 +1260,12 @@ mod process_runner_tests {
 
     // The injected window and poll interval live here because this is the task that first
     // consumes them: a constant nothing uses yet is a dead-code warning under
-    // `clippy --all-targets -- -D warnings`.
+    // `clippy --all-targets -- -D warnings`. Both are linux-gated because their only
+    // consumers are the linux-gated helper and test below — ungated they would be dead
+    // constants on macOS and trip the same gate there.
+    #[cfg(target_os = "linux")]
     const STALL_WINDOW: Duration = Duration::from_millis(300);
+    #[cfg(target_os = "linux")]
     const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
     #[cfg(target_os = "linux")]
