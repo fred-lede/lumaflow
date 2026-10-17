@@ -403,6 +403,32 @@ git commit -m "feat(media): read the kernel activity counters that separate a pa
         runner_for(directory).with_stall_deadlines(stall_timeout, poll_interval)
     }
 
+    #[test]
+    fn captures_empty_streams_from_a_child_that_writes_nothing() {
+        // The other half of the guard Task 1 started, added here because this is the task
+        // that replaces `Command::output()` with `spawn()` plus two drain threads: a real
+        // `ffprobe -v error` on a clean file writes nothing at all, so the rewrite must
+        // return empty vectors — not a truncated read, not a hang on a pipe nobody wrote.
+        let directory = fixture_directory("probe-quiet");
+        fake_tool(&directory, "ffprobe", "exit 0");
+        let output = runner_for(&directory)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a quiet child is still a completed probe");
+
+        assert_eq!(output.status, 0, "a clean exit must survive");
+        assert!(
+            output.stdout.is_empty(),
+            "stdout: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "stderr: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn stops_a_probe_child_that_stops_reading() {
@@ -598,7 +624,7 @@ cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets -- -D warn
 cd src-tauri && cargo +1.88.0 check --locked --all-targets 2>&1 | tail -5
 ```
 
-Expected: fmt／clippy 無輸出；lib suite `138 passed`；MSRV check `Finished`。
+Expected: fmt／clippy 無輸出；lib suite `139 passed`；MSRV check `Finished`。
 
 - [ ] **Step 7: commit**
 
@@ -688,7 +714,7 @@ Expected: `ok`。若紅：不要改測試的 fixture 或斷言，回到 `run_gua
 cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test --lib 2>&1 | tail -5
 ```
 
-Expected: `139 passed`。
+Expected: `140 passed`。
 
 - [ ] **Step 4: commit**
 
@@ -790,7 +816,7 @@ Expected: 2 passed。任何一條紅 → 改 `run_guarded`（例如把 CPU 計�
 cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test --lib 2>&1 | tail -5
 ```
 
-Expected: `141 passed`。
+Expected: `142 passed`。
 
 - [ ] **Step 5: commit**
 
@@ -866,7 +892,7 @@ Expected: `ok`（`.ok()?` 已有這個行為；這個測試是把 spec §6 的�
 cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test --lib 2>&1 | tail -5
 ```
 
-Expected: `142 passed`。
+Expected: `143 passed`。
 
 - [ ] **Step 4: commit**
 
@@ -1074,7 +1100,7 @@ npm test -- --run 2>&1 | tail -8
 npm run test:e2e 2>&1 | tail -8
 ```
 
-Expected：fmt／clippy 無輸出；`cargo test --lib` → **142 passed**（133 ＋ 9）；MSRV `Finished`；前端 `156 tests`／18 files 綠；e2e `5 passed | 1 skipped`。任何一項退化 → 停下修復，不得用 `#[ignore]`、`--skip` 或調高斷言來「通過」。
+Expected：fmt／clippy 無輸出；`cargo test --lib` → **143 passed**（133 ＋ 10）；MSRV `Finished`；前端 `156 tests`／18 files 綠；e2e `5 passed | 1 skipped`。任何一項退化 → 停下修復，不得用 `#[ignore]`、`--skip` 或調高斷言來「通過」。
 
 - [ ] **Step 2: advisory 層全套**
 
@@ -1105,7 +1131,7 @@ git log --oneline main..HEAD
 /tmp/opencode/gh.sh pr create --fill
 ```
 
-PR 標題風格沿用 repo：`feat(media): stop a probe child that stops producing activity`。PR 描述要寫：基線數字（142／4）、Task 9 的實測投影、Step 3 的實地確認結果、以及 macOS 缺口明文指向 docs。
+PR 標題風格沿用 repo：`feat(media): stop a probe child that stops producing activity`。PR 描述要寫：基線數字（143／4）、Task 9 的實測投影、Step 3 的實地確認結果、以及 macOS 缺口明文指向 docs。
 
 - [ ] **Step 5: 新血審查（fresh review），等使用者批准後才合併**
 
@@ -1117,4 +1143,4 @@ REQUIRED SUB-SKILL: superpowers:requesting-code-review → 派一個**沒參與�
 
 - **Spec coverage**：spec §1（為何）→ Task 3／7 的錯誤碼與 FAQ；§2 測量結論 → Task 2 的註解要求與 Task 9 的實測；§3 活動訊號（三個計數器）→ Task 2；§4 判定規則（全部不動才殺、任何變動重置、`/proc` 不可讀不殺）→ Task 2 Step 4 ＋ Task 3 Step 4；§5 平台範圍 → Task 3 Step 3 的 cfg 切分 ＋ Task 8 Step 1 第 5 點；§6 錯誤與影響（`probe_stalled`、一個 120 s 窗口、B 被殺 → unknown）→ Task 3 ＋ Task 6；§7 測試分層（假子程序進阻擋性 lib suite、真 ffprobe 進 advisory）→ Task 1–6 ＋ Task 7；§8 非目標（不設總時長期限、不改 ffmpeg 參數、不重試、不動 runner.rs）→ Global Constraints ＋ Task 10 Step 3；§9 決策與判斷（120 s、CPU 也算活動、住在 probe.rs、測試時限「> 輪詢間隔」）→ 對應 task 的 Interfaces／常數。
 - **Placeholder scan**：無 TBD／TODO；每個測試步都有可跑的指令與 Expected；Task 3 的 `run_guarded` 以骨架給出，三個 `/* … */` 槽都是「沿用今日同一個組法」的明確指向（`probe.rs:55-70`、`probe_command_error`），不是未決定的事。
-- **Type consistency**：`ActivitySample` 欄位名（`read_bytes`／`read_calls`／`cpu_ticks`）在 Task 2 定義、Task 3 消費；`with_stall_deadlines` 的名字與簽章在 Task 3 定義、Task 5／7 消費；`probe_stalled` 在 Task 3 產生、Task 4／6／7 斷言；`STALL_WINDOW`／`POLL_INTERVAL` 在 Task 1 定義、Task 3／4／5 消費；`make_fifo` 在 Task 4 定義、Task 5 消費。測試總數累加：133 → 137（T2）→ 138（T3）→ 139（T4）→ 141（T5）→ 142（T6）；advisory 3 → 4（T7）。
+- **Type consistency**：`ActivitySample` 欄位名（`read_bytes`／`read_calls`／`cpu_ticks`）在 Task 2 定義、Task 3 消費；`with_stall_deadlines` 的名字與簽章在 Task 3 定義、Task 5／7 消費；`probe_stalled` 在 Task 3 產生、Task 4／6／7 斷言；`STALL_WINDOW`／`POLL_INTERVAL` 在 Task 1 定義、Task 3／4／5 消費；`make_fifo` 在 Task 4 定義、Task 5 消費。測試總數累加：133 → 134（T1）→ 137（T2）→ 139（T3）→ 140（T4）→ 142（T5）→ 143（T6）；advisory 3 → 4（T7）。
