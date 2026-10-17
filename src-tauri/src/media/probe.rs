@@ -10,6 +10,7 @@ use crate::domain::media::{
 use super::tools::ToolLocator;
 use super::MediaError;
 
+#[derive(Debug)]
 pub struct CommandOutput {
     pub status: i32,
     pub stdout: String,
@@ -20,20 +21,270 @@ pub trait CommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<CommandOutput, MediaError>;
 }
 
+/// A snapshot of the three kernel counters that separate "working" from "parked".
+/// `rchar` and `syscr` count bytes and calls of `read()`/`write()`; `utime + stime`
+/// counts CPU. Measured (see the ledger, Finding 8): the leader's `/proc/<pid>/io` and
+/// `/proc/<pid>/stat` already sum the whole thread group, so a multi-threaded ffmpeg
+/// whose main thread sits in `read()` while its filter threads work still shows
+/// movement, and walking `/proc/<pid>/task/*` would add cost without adding signal.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub(crate) struct ActivitySample {
+    read_bytes: u64,
+    read_calls: u64,
+    cpu_ticks: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl ActivitySample {
+    pub(crate) fn progressed_since(&self, previous: &Self) -> bool {
+        self.read_bytes != previous.read_bytes
+            || self.read_calls != previous.read_calls
+            || self.cpu_ticks != previous.cpu_ticks
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn parse_io_field(text: &str, field: &str) -> Option<u64> {
+    // `/proc/<pid>/io` has `rchar:` and `wchar:`, `syscr:` and `syscw:` side by side, so
+    // the key must match exactly after trimming; a loose `starts_with`
+    // or `contains` would return the wrong counter, and a wrong counter is a wrong
+    // watchdog decision.
+    text.lines().find_map(|line| match line.split_once(':') {
+        Some((key, value)) if key.trim() == field => value.trim().parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn parse_stat_cpu(text: &str) -> Option<u64> {
+    // The comm field (field 2) may contain spaces and parentheses, so count from the
+    // last ')'. The remainder starts at field 3 (state), making utime index 11 and
+    // stime index 12 (1-based fields 14 and 15).
+    let (_, remainder) = text.rsplit_once(')')?;
+    let fields: Vec<&str> = remainder.split_whitespace().collect();
+    let utime = fields.get(11)?.parse::<u64>().ok()?;
+    let stime = fields.get(12)?.parse::<u64>().ok()?;
+    Some(utime + stime)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn read_activity_sample(pid: u32) -> Result<ActivitySample, std::io::Error> {
+    let io_text = std::fs::read_to_string(format!("/proc/{pid}/io"))?;
+    let stat_text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let (Some(read_bytes), Some(read_calls), Some(cpu_ticks)) = (
+        parse_io_field(&io_text, "rchar"),
+        parse_io_field(&io_text, "syscr"),
+        parse_stat_cpu(&stat_text),
+    ) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("could not read the activity counters of pid {pid}"),
+        ));
+    };
+    Ok(ActivitySample {
+        read_bytes,
+        read_calls,
+        cpu_ticks,
+    })
+}
+
+/// How long a probe child may go without reading a byte or burning CPU before the
+/// watchdog stops it. This is a gap between activity samples, not a total-runtime
+/// deadline: a probe that really is reading is never stopped, and a throttled probe that
+/// legitimately spends 230 s reading 241 MB of a fragmented MP4 (ledger Finding 4) stays
+/// alive. 120 s is deliberately generous — a hard-mounted NFS source can take 60-180 s
+/// between reads — and matches the FFmpeg watchdog's window in src-tauri/src/jobs/runner.rs.
+#[cfg(target_os = "linux")]
+pub const PROBE_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Sampling cadence, not a deadline. The kill decision is wall-clock — `last_activity.elapsed()`
+/// against `PROBE_STALL_TIMEOUT` — so this only sets how quickly the runner notices progress, and
+/// how quickly it notices a child that has already exited. Measured: with a 1 s cadence a child
+/// that exited a few ms after spawn was still charged a full poll (1.00 s in
+/// `captures_empty_streams_from_a_child_that_writes_nothing`), which would have added up to a
+/// second to every probe in the app. 100 ms keeps that invisible and costs about ten small
+/// `/proc` reads per second while a probe runs.
+#[cfg(target_os = "linux")]
+const PROBE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 #[derive(Clone)]
 pub struct ProcessCommandRunner {
     tools: ToolLocator,
+    #[cfg(target_os = "linux")]
+    stall_timeout: std::time::Duration,
+    #[cfg(target_os = "linux")]
+    poll_interval: std::time::Duration,
 }
 
 impl ProcessCommandRunner {
     pub fn system() -> Self {
         Self {
             tools: ToolLocator::system(),
+            #[cfg(target_os = "linux")]
+            stall_timeout: PROBE_STALL_TIMEOUT,
+            #[cfg(target_os = "linux")]
+            poll_interval: PROBE_POLL_INTERVAL,
         }
     }
 
     pub fn with_tools(tools: ToolLocator) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            #[cfg(target_os = "linux")]
+            stall_timeout: PROBE_STALL_TIMEOUT,
+            #[cfg(target_os = "linux")]
+            poll_interval: PROBE_POLL_INTERVAL,
+        }
+    }
+
+    /// Overrides the watchdog window. Production release builds do not compile this
+    /// method at all, so the shipped app always uses `PROBE_STALL_TIMEOUT`. Tests use a
+    /// short window so the stall paths are exercised without waiting two minutes, and a
+    /// window shorter than two polls would stop a healthy probe, so nothing may ask for
+    /// one.
+    #[cfg(all(target_os = "linux", any(test, debug_assertions)))]
+    pub fn with_stall_deadlines(
+        mut self,
+        stall_timeout: std::time::Duration,
+        poll_interval: std::time::Duration,
+    ) -> Self {
+        debug_assert!(
+            stall_timeout > poll_interval * 2,
+            "a stall window shorter than two polls would fire between samples of a healthy child"
+        );
+        self.stall_timeout = stall_timeout;
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_guarded(
+        &self,
+        program: &str,
+        executable: &Path,
+        args: &[String],
+    ) -> Result<CommandOutput, MediaError> {
+        // Stdin must be nulled explicitly: Command::output() does it for you, spawn()
+        // inherits the parent's stdin, and a probe that inherits a terminal would block
+        // on a read of its own.
+        let mut child = std::process::Command::new(executable)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                MediaError::with_details(
+                    "probe_command_error",
+                    "FFprobe could not be started",
+                    error.to_string(),
+                )
+            })?;
+
+        // Both streams are drained on their own threads, so a child that fills a pipe
+        // buffer never blocks on a write — which would look exactly like a stalled read.
+        // Assumes the child is a leaf process: a grandchild holding a pipe open would
+        // keep the join waiting after the child is gone (same documented assumption as
+        // the FFmpeg watchdog in src-tauri/src/jobs/runner.rs).
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let stdout_thread = std::thread::spawn(move || read_stream_to_end(stdout));
+        let stderr_thread = std::thread::spawn(move || read_stream_to_end(stderr));
+
+        let pid = child.id();
+        // The window timer starts at spawn, not at the first sample: the first sample has
+        // no previous one to compare against, so a child that never reads a byte is judged
+        // by the elapsed window alone and is stopped when it expires.
+        let mut last_activity = std::time::Instant::now();
+        let mut previous: Option<ActivitySample> = None;
+        // Poll order matters: try_wait first, then sample, then decide, and only then sleep.
+        // A child that has already exited when the loop starts is caught on the first
+        // `try_wait`; one that exits just after it is caught at the next tick, which is why the
+        // cadence above is 100 ms rather than a second.
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Both the success and the stall path join the drain threads, and the
+                    // output assembly matches the pre-watchdog `Command::output()` body:
+                    // exit code with -1 for a signal, lossy UTF-8 streams.
+                    let stdout_bytes = join_drained(stdout_thread)?;
+                    let stderr_bytes = join_drained(stderr_thread)?;
+                    return Ok(CommandOutput {
+                        status: status.code().unwrap_or(-1),
+                        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+                        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+                    });
+                }
+                Ok(None) => {
+                    // A sample we could not read is not evidence either way: it neither
+                    // refreshes the window nor proves a stall. The watchdog only ever acts
+                    // on counters it actually read, so a child is stopped because its last
+                    // observed activity aged out of the window, never because a read failed.
+                    if let Ok(sample) = read_activity_sample(pid) {
+                        if previous
+                            .as_ref()
+                            .is_some_and(|was| sample.progressed_since(was))
+                        {
+                            last_activity = std::time::Instant::now();
+                        }
+                        previous = Some(sample);
+                    }
+                    if last_activity.elapsed() >= self.stall_timeout {
+                        return Err(stalled_probe_error(
+                            program,
+                            child,
+                            stdout_thread,
+                            stderr_thread,
+                            last_activity.elapsed(),
+                        ));
+                    }
+                    std::thread::sleep(self.poll_interval);
+                }
+                Err(error) => {
+                    // try_wait itself failed, so the child's state is unknown: stop it
+                    // before reporting the failure as a command error.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    return Err(MediaError::with_details(
+                        "probe_command_error",
+                        "FFprobe could not be started",
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// macOS and Windows keep today's behaviour: a blocking `output()` with no activity
+    /// watchdog. The probe watchdog is Linux-only for now; on the other platforms a
+    /// child parked on an unreadable input still blocks its caller — a known platform
+    /// gap, documented here rather than fixed by this change.
+    #[cfg(not(target_os = "linux"))]
+    fn run_unguarded(
+        &self,
+        _program: &str,
+        executable: &Path,
+        args: &[String],
+    ) -> Result<CommandOutput, MediaError> {
+        let output = std::process::Command::new(executable)
+            .args(args)
+            .output()
+            .map_err(|error| {
+                MediaError::with_details(
+                    "probe_command_error",
+                    "FFprobe could not be started",
+                    error.to_string(),
+                )
+            })?;
+
+        Ok(CommandOutput {
+            status: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
     }
 }
 
@@ -52,22 +303,102 @@ impl CommandRunner for ProcessCommandRunner {
                 error.to_string(),
             )
         })?;
-        let output = std::process::Command::new(executable)
-            .args(args)
-            .output()
-            .map_err(|error| {
-                MediaError::with_details(
-                    "probe_command_error",
-                    "FFprobe could not be started",
-                    error.to_string(),
-                )
-            })?;
+        #[cfg(target_os = "linux")]
+        return self.run_guarded(program, &executable, args);
+        #[cfg(not(target_os = "linux"))]
+        return self.run_unguarded(program, &executable, args);
+    }
+}
 
-        Ok(CommandOutput {
-            status: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
+/// Stops a child the watchdog decided is stuck and builds the error the probe reports.
+/// Killing the child closes the pipe write ends, so both drain threads reach EOF and
+/// join promptly — assuming the child is a leaf process; a grandchild holding a pipe
+/// open would keep the joins waiting (same documented assumption as the FFmpeg watchdog
+/// in src-tauri/src/jobs/runner.rs). A drain thread that panicked or failed its read is
+/// reported as `probe_command_error` instead of a stall: an unreadable stream is a
+/// broken command, not evidence the child was parked.
+#[cfg(target_os = "linux")]
+fn stalled_probe_error(
+    program: &str,
+    mut child: std::process::Child,
+    stdout: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    idle: std::time::Duration,
+) -> MediaError {
+    let _ = child.kill();
+    let _ = child.wait();
+    if let Err(error) = join_drained(stdout) {
+        return error;
+    }
+    let stderr_text = match join_drained(stderr) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => return error,
+    };
+
+    let mut details = format!("program={program} idle_for={}", humanize_window(idle));
+    // Same shape as the FFmpeg watchdog's stalled_error: hand the user the stderr the
+    // child managed to produce before it parked.
+    if !stderr_text.is_empty() {
+        details.push('\n');
+        details.push_str(&stderr_text);
+    }
+    MediaError::with_details(
+        "probe_stalled",
+        format!(
+            "{} made no progress reading or decoding for {} and was stopped",
+            tool_label(program),
+            humanize_window(idle)
+        ),
+        details,
+    )
+}
+
+/// Joins one drain thread and unwraps its read. A thread that panicked or a read that
+/// failed is reported as `probe_command_error` rather than silently truncated output,
+/// matching what `Command::output()` would have surfaced.
+#[cfg(target_os = "linux")]
+fn join_drained(
+    thread: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, MediaError> {
+    match thread.join() {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(MediaError::with_details(
+            "probe_command_error",
+            "FFprobe could not be started",
+            error.to_string(),
+        )),
+        Err(_) => Err(MediaError::with_details(
+            "probe_command_error",
+            "FFprobe could not be started",
+            "the stream drain thread failed",
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_stream_to_end<R: std::io::Read>(mut stream: R) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Renders a watchdog window for an error message: whole seconds as "N seconds",
+/// sub-second windows as "N ms".
+#[cfg(target_os = "linux")]
+fn humanize_window(window: std::time::Duration) -> String {
+    if window.as_secs() > 0 {
+        format!("{} seconds", window.as_secs())
+    } else {
+        format!("{} ms", window.subsec_millis())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tool_label(program: &str) -> &str {
+    match program {
+        "ffprobe" => "FFprobe",
+        "ffmpeg" => "FFmpeg",
+        other => other,
     }
 }
 
@@ -448,6 +779,7 @@ fn invalid_field(field: &str) -> MediaError {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::VecDeque;
 
     use super::*;
     use crate::domain::media::{
@@ -567,6 +899,28 @@ mod tests {
                 stdout: self.stdout.clone(),
                 stderr: self.stderr.clone(),
             })
+        }
+    }
+
+    #[derive(Debug)]
+    struct ScriptedRunner {
+        responses: RefCell<VecDeque<Result<CommandOutput, MediaError>>>,
+    }
+
+    impl ScriptedRunner {
+        fn scripted(responses: Vec<Result<CommandOutput, MediaError>>) -> Self {
+            Self {
+                responses: RefCell::new(responses.into()),
+            }
+        }
+    }
+
+    impl CommandRunner for ScriptedRunner {
+        fn run(&self, _program: &str, _args: &[String]) -> Result<CommandOutput, MediaError> {
+            self.responses
+                .borrow_mut()
+                .pop_front()
+                .expect("scripted runner response")
         }
     }
 
@@ -794,6 +1148,24 @@ mod tests {
     }
 
     #[test]
+    fn degrades_to_unknown_quality_when_the_spectral_pass_is_stopped() {
+        let actual = probe_media(
+            &ScriptedRunner::scripted(vec![
+                Ok(CommandOutput {
+                    status: 0,
+                    stdout: FLAC_JSON.to_owned(),
+                    stderr: String::new(),
+                }),
+                Err(MediaError::new("probe_stalled", "FFprobe was stopped")),
+            ]),
+            "/input/voice.flac",
+        )
+        .expect("a stopped spectral pass should still probe the file");
+
+        assert_eq!(actual.source_quality.status, SourceQualityStatus::Unknown);
+    }
+
+    #[test]
     fn probes_multiple_audio_tracks_and_subtitle_presence() {
         let actual = probe_media(
             &FakeRunner::successful(MULTI_AUDIO_MP4_JSON),
@@ -849,5 +1221,418 @@ mod tests {
 
         assert_eq!(error.code, "probe_command_failed");
         assert_eq!(error.details.as_deref(), Some("No such file"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_runner_tests {
+    use std::fs;
+    // Each of these three is consumed only by the linux-gated parked-read test below, so
+    // ungated they are unused imports on macOS and `clippy --all-targets -- -D warnings`
+    // goes red there (same Ruling 8 shape as the gated constants further down).
+    #[cfg(target_os = "linux")]
+    use std::fs::OpenOptions;
+    #[cfg(target_os = "linux")]
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    #[cfg(target_os = "linux")]
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::{CommandRunner, ProcessCommandRunner};
+    use crate::media::tools::{target_directory, ToolLocator};
+
+    // A script written and then immediately exec'd can hit ETXTBSY: the loader still
+    // holds the file open while the kernel refuses to map it as a program. The guard
+    // line lets each fixture be primed with one harmless exec first. Same race and the
+    // same remedy as the fixture helper in src-tauri/src/jobs/runner.rs's tests.
+    const PRIME_ARGUMENT: &str = "--prime";
+    const ETXTBSY: i32 = 26;
+
+    fn fixture_directory(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("lumaflow-probe-{name}-{}", std::process::id()));
+        // A panicking test leaves its fixture directory behind, and a later run that
+        // reuses the same PID would inherit those files, so each test starts empty.
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("probe test directory should be creatable");
+        directory
+    }
+
+    fn prime_before_exec(path: &Path) {
+        for _ in 0..10 {
+            match Command::new(path).arg(PRIME_ARGUMENT).status() {
+                Ok(_) => return,
+                Err(error) if error.raw_os_error() == Some(ETXTBSY) => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("fixture should be executable: {error}"),
+            }
+        }
+        panic!("fixture stayed unexecutable: {}", path.display());
+    }
+
+    /// Writes a POSIX-sh fixture tool exactly where `ToolLocator` looks for it.
+    fn fake_tool(directory: &Path, tool: &str, body: &str) -> PathBuf {
+        let bin_directory = directory.join("binaries").join(target_directory());
+        fs::create_dir_all(&bin_directory).expect("fixture binary directory should be creatable");
+        let path = bin_directory.join(tool);
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = {PRIME_ARGUMENT} ] && [ \"$#\" -eq 1 ]; then exit 0; fi\n{body}\n"
+            ),
+        )
+        .expect("fixture tool should be writable");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("fixture tool should be chmod-able");
+        prime_before_exec(&path);
+        path
+    }
+
+    fn runner_for(directory: &Path) -> ProcessCommandRunner {
+        let tools = ToolLocator::bundled();
+        tools.set_resource_dir(directory);
+        ProcessCommandRunner::with_tools(tools)
+    }
+
+    #[test]
+    fn captures_stdout_stderr_and_status_from_a_completed_child() {
+        let directory = fixture_directory("output-capture");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            "printf 'probe-json\\n'; printf 'probe-error\\n' >&2; exit 3",
+        );
+        let output = runner_for(&directory)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a completed child should produce a command output");
+
+        assert_eq!(output.status, 3, "the child's exit code must survive");
+        assert_eq!(output.stdout, "probe-json\n");
+        assert_eq!(output.stderr, "probe-error\n");
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    // The injected window and poll interval live here because this is the task that first
+    // consumes them: a constant nothing uses yet is a dead-code warning under
+    // `clippy --all-targets -- -D warnings`. Both are linux-gated because their only
+    // consumers are the linux-gated helper and test below — ungated they would be dead
+    // constants on macOS and trip the same gate there.
+    #[cfg(target_os = "linux")]
+    const STALL_WINDOW: Duration = Duration::from_millis(300);
+    #[cfg(target_os = "linux")]
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+    #[cfg(target_os = "linux")]
+    fn runner_with_windows(
+        directory: &Path,
+        stall_timeout: Duration,
+        poll_interval: Duration,
+    ) -> ProcessCommandRunner {
+        runner_for(directory).with_stall_deadlines(stall_timeout, poll_interval)
+    }
+
+    #[test]
+    fn captures_empty_streams_from_a_child_that_writes_nothing() {
+        // The other half of the guard Task 1 started, added here because this is the task
+        // that replaces `Command::output()` with `spawn()` plus two drain threads: a real
+        // `ffprobe -v error` on a clean file writes nothing at all, so the rewrite must
+        // return empty vectors — not a truncated read, not a hang on a pipe nobody wrote.
+        let directory = fixture_directory("probe-quiet");
+        fake_tool(&directory, "ffprobe", "exit 0");
+        let started = std::time::Instant::now();
+        let output = runner_for(&directory)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a quiet child is still a completed probe");
+
+        assert_eq!(output.status, 0, "a clean exit must survive");
+        assert!(output.stdout.is_empty(), "stdout: {:?}", output.stdout);
+        assert!(output.stderr.is_empty(), "stderr: {:?}", output.stderr);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "a child that exits immediately must not be held by the poll cadence: {:?}",
+            started.elapsed()
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stops_a_probe_child_that_stops_reading() {
+        // `exec` replaces the shell with an idle process: the watched child stays alive,
+        // reads nothing and burns nothing, which is the shape of ffprobe blocked in
+        // open() on a FIFO nobody writes to. The sleep is bounded so the pre-watchdog
+        // red run fails in 20 s rather than forever.
+        let directory = fixture_directory("probe-stall");
+        fake_tool(&directory, "ffprobe", "exec sleep 20");
+        let started = std::time::Instant::now();
+        let error = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect_err("a probe child that reads nothing should be stopped");
+
+        assert_eq!(
+            error.code, "probe_stalled",
+            "error details: {:?}",
+            error.details
+        );
+        assert!(error.message.contains("stopped"), "error message: {error}");
+        assert!(
+            error
+                .details
+                .as_deref()
+                .unwrap_or_default()
+                .contains("program=ffprobe"),
+            "error details: {:?}",
+            error.details
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the watchdog should act inside its window, took {:?}",
+            started.elapsed()
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    // Gated like the constants above: its only caller is the linux-gated test below, so
+    // ungated it would be dead code on macOS and trip `clippy --all-targets -- -D warnings`.
+    #[cfg(target_os = "linux")]
+    fn make_fifo(directory: &Path, name: &str) -> PathBuf {
+        let path = directory.join(name);
+        let status = Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo should be runnable");
+        assert!(status.success(), "mkfifo should succeed");
+        path
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stops_a_probe_child_parked_midway_through_a_read() {
+        // The real hang shape: a FIFO fed once, with the write end held open so the
+        // reader never sees EOF. The child reads 64 KiB and then parks inside read().
+        // The writer is this test process, so there is no orphan holding the FIFO.
+        let directory = fixture_directory("probe-parked-read");
+        let fifo = make_fifo(&directory, "silent.fifo");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            &format!("exec cat '{}'", fifo.display()),
+        );
+
+        let (keep_open_tx, keep_open_rx) = mpsc::channel::<()>();
+        let writer_fifo = fifo.clone();
+        let writer = thread::spawn(move || {
+            // O_RDWR, not O_WRONLY: opening a FIFO's write end blocks until a reader
+            // exists, so if the watchdog killed the child before it opened the FIFO the
+            // writer would sit in open() forever and hang the test. O_RDWR returns at
+            // once and still holds a write end open, so the child reads 64 KiB and then
+            // parks instead of seeing EOF — the hang shape is unchanged.
+            let mut handle = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&writer_fifo)
+                .expect("the FIFO write end should open");
+            let _ = handle.write_all(&[7_u8; 64 * 1024]);
+            // Hold the write end until the runner finishes, otherwise the child sees EOF.
+            let _ = keep_open_rx.recv();
+        });
+
+        let started = std::time::Instant::now();
+        let error = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect_err("a child parked inside read() should be stopped");
+        let _ = keep_open_tx.send(());
+        writer.join().expect("the FIFO writer should finish");
+
+        assert_eq!(
+            error.code, "probe_stalled",
+            "error details: {:?}",
+            error.details
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the watchdog should act inside its window, took {:?}",
+            started.elapsed()
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeps_a_probe_child_that_keeps_reading_bytes() {
+        // Slow but genuinely progressing: 4 KiB every 40 ms for 400 ms, which is longer
+        // than the 300 ms stall window. Every poll sees the counters move, so the child
+        // must run to its natural exit and its whole stdout must arrive.
+        let directory = fixture_directory("probe-reading");
+        let fifo = make_fifo(&directory, "steady.fifo");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            &format!("exec cat '{}'", fifo.display()),
+        );
+
+        let writer_fifo = fifo.clone();
+        let writer = thread::spawn(move || {
+            // O_RDWR, not O_WRONLY: opening a FIFO's write end blocks until a reader
+            // exists, so if the watchdog killed the child first the writer would sit in
+            // open() forever and `writer.join()` would hang this test. O_RDWR returns at
+            // once and the writes still land in the pipe; dropping the handle at the end
+            // of the closure is what closes the write end so cat reaches EOF and exits 0.
+            let mut handle = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&writer_fifo)
+                .expect("the FIFO write end should open");
+            for _ in 0..10 {
+                if handle.write_all(&[9_u8; 4 * 1024]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(40));
+            }
+            // Closing the write end is what lets cat reach EOF and exit 0.
+        });
+
+        let output = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a child that keeps reading must not be stopped");
+        writer.join().expect("the FIFO writer should finish");
+
+        assert_eq!(output.status, 0, "stderr: {}", output.stderr);
+        assert_eq!(
+            output.stdout.len(),
+            10 * 4 * 1024,
+            "every byte must be captured"
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeps_a_probe_child_that_burns_cpu_without_reading() {
+        // The decode/filters phase of a probe: everything is already read and the child
+        // only computes. A pure-builtin shell loop burns CPU in the watched pid itself
+        // (dash runs about 1.25 M iterations per second, so 500 000 is ~0.4 s here and
+        // only slower, never shorter, on a shared runner). `exec` keeps the same pid, so
+        // the counters being sampled are the counters doing the work.
+        let directory = fixture_directory("probe-computing");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            "exec sh -c 'i=0; while [ $i -lt 500000 ]; do i=$((i+1)); done'",
+        );
+
+        // A tighter window than the other tests use: the fixture's runtime is a property of
+        // the machine's core, and a 300 ms window would silently stop exercising the kill
+        // decision on a core fast enough to finish the loop inside it. 150 ms over a 25 ms
+        // poll keeps the "window > 2 × poll" rule the production constructor asserts.
+        let output = runner_with_windows(
+            &directory,
+            Duration::from_millis(150),
+            Duration::from_millis(25),
+        )
+        .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+        .expect("a child that is computing must not be stopped");
+
+        assert_eq!(output.status, 0, "stderr: {}", output.stderr);
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod activity_tests {
+    use super::{parse_io_field, parse_stat_cpu, read_activity_sample, ActivitySample};
+
+    // The exact field set of a real /proc/<pid>/io (verified against a live one).
+    const IO_TEXT: &str = "rchar: 1048576\nwchar: 4096\nsyscr: 8\nsyscw: 999\n\
+        read_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
+
+    // utime is field 14 and stime field 15, but the comm field (2) may contain spaces
+    // and parentheses, so the parse must count from the last ')'. In this line utime=123
+    // and stime=45.
+    const STAT_TEXT: &str = "1234 (ffprobe (odd) name) S 1 1234 1234 0 -1 4207616 100 0 \
+        0 0 123 45 0 0 20 0 1 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \n";
+
+    #[test]
+    fn parses_io_counters_without_matching_a_similarly_named_field() {
+        assert_eq!(parse_io_field(IO_TEXT, "rchar"), Some(1_048_576));
+        assert_eq!(parse_io_field(IO_TEXT, "syscr"), Some(8));
+        assert_eq!(parse_io_field(IO_TEXT, "wchar"), Some(4096));
+        assert_eq!(parse_io_field(IO_TEXT, "syscw"), Some(999));
+        // A prefix of a real key must not match it. `wchar` is the near-miss for `rchar`
+        // and `syscw` for `syscr`, so a parse that matches loosely returns the wrong
+        // counter — and a wrong counter is a wrong watchdog decision.
+        assert_eq!(parse_io_field(IO_TEXT, "rcha"), None);
+        assert_eq!(parse_io_field(IO_TEXT, "sysc"), None);
+        assert_eq!(parse_io_field(IO_TEXT, "absent"), None);
+    }
+
+    #[test]
+    fn parses_cpu_ticks_from_a_stat_line_whose_command_contains_parentheses() {
+        assert_eq!(parse_stat_cpu(STAT_TEXT), Some(168));
+        assert_eq!(parse_stat_cpu("1234 (x) S"), None);
+    }
+
+    #[test]
+    fn a_sample_progresses_when_any_counter_moves_but_not_when_all_are_frozen() {
+        let previous = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 4,
+            cpu_ticks: 10,
+        };
+        let frozen = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 4,
+            cpu_ticks: 10,
+        };
+        let reading = ActivitySample {
+            read_bytes: 1_001,
+            read_calls: 4,
+            cpu_ticks: 10,
+        };
+        let counting = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 5,
+            cpu_ticks: 10,
+        };
+        // A child whose input is already fully read and whose filters are decoding burns
+        // CPU without reading a byte. That is activity, not a stall.
+        let computing = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 4,
+            cpu_ticks: 11,
+        };
+
+        assert!(!frozen.progressed_since(&previous));
+        assert!(reading.progressed_since(&previous));
+        assert!(counting.progressed_since(&previous));
+        assert!(computing.progressed_since(&previous));
+    }
+
+    #[test]
+    fn a_child_that_is_gone_reports_an_error_instead_of_a_sample() {
+        // u32::MAX is not a valid pid on any Linux box (pid_max tops out near 4 million),
+        // so this is a guaranteed ENOENT. The watchdog must treat an unreadable child as
+        // "do not act", never as "stalled".
+        let error = read_activity_sample(u32::MAX)
+            .expect_err("a pid that does not exist should not produce a sample");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 }

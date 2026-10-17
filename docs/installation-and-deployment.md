@@ -370,9 +370,23 @@ chmod 755 src-tauri/binaries/<target>/ffmpeg src-tauri/binaries/<target>/ffprobe
 
 兩個期限計算的都是「兩次 progress 輸出之間的沉默」，不是轉檔總時長，所以合法的長轉檔不受影響。本專案 planner 實際產出的 plan（`-c copy` remux、flac／mp3／aac 音訊轉檔、`libx264` 預設 preset 加 `-vf` 的視訊轉檔）實測最大 progress 間距不到 1 秒。
 
-這個 watchdog 抓的是**進度流沉默**，不是「轉檔沒有前進」。內嵌的 FFmpeg 8 按牆鐘每 0.5 秒輸出一次 progress，所以來源掛載點失靈這類 I/O 卡住會持續輸出數值凍結的 progress 行，runner 把「仍在輸出」視為子進程還活著，目前不會中止它：實測把輸出端堵住 60 秒，progress 間距仍是 0.51 秒，而 `out_time_us` 全程凍結。要偵測「數值停滯」需要追蹤 `out_time_us` 有沒有推進，這與分析階段的 ffprobe 目前仍沒有期限一樣，都是已記錄的後續工作。
+這個 watchdog 抓的是**進度流沉默**，不是「轉檔沒有前進」。內嵌的 FFmpeg 8 按牆鐘每 0.5 秒輸出一次 progress，所以來源掛載點失靈這類 I/O 卡住會持續輸出數值凍結的 progress 行，runner 把「仍在輸出」視為子進程還活著，目前不會中止它：實測把輸出端堵住 60 秒，progress 間距仍是 0.51 秒，而 `out_time_us` 全程凍結。要偵測「數值停滯」需要追蹤 `out_time_us` 有沒有推進，這仍是已記錄的後續工作；分析階段的探測改由活動 watchdog 負責，見下條。
 
 被停止的轉換不會發布半成品：暫存輸出照既有 `TempOutput` 規則清理，輸出目錄不會出現不完整檔案，可直接用 job 上的 Retry 重試。
+
+### 探測卡住會被中止
+
+探測（ffprobe，以及頻譜分析用的 ffmpeg）若連續 120 秒既沒有讀取任何 bytes、也沒有燒 CPU，會被停止，job／選檔以 `probe_stalled` 失敗，錯誤訊息會附上當時取得的 FFmpeg stderr（若有）。
+
+120 秒計算的是「兩次活動之間的空檔」，**不是探測總時長**，所以真的在讀的探測不會被殺。實測一個 269 MB 的 fragmented MP4（18 000 個 fragment），ffprobe 為了走查每個 fragment 的索引會合法讀到 241 MB；在 1 MiB/s 的來源下這是 230 秒的合法探測，它不會被中止。
+
+活動訊號來自 kernel 的 I/O 與 CPU 計數器：`/proc/<pid>/io` 的 `rchar`／`syscr`，以及 `/proc/<pid>/stat` 的 `utime + stime`。三個計數器全部不動、且子進程仍活著，才會把它停止；讀得慢但有在讀、或輸入已讀完只剩解碼運算，都算活動。
+
+一個卡死的探測最壞只花掉**一個 120 秒窗口**：ffprobe 失敗就不會再跑後面的頻譜分析；頻譜分析被殺則品質判定降為 `unknown`，探測本身仍然成功。
+
+活動 watchdog 目前只在 Linux 生效。macOS 沒有 `/proc`，探測沿用沒有上限的等待行為，也就是本條描述的問題在 macOS 上仍存在；這是已記錄的缺口，不是已解決的支援。
+
+本條也沒有處理一個相鄰問題：**合法但很慢**的探測仍會凍結 UI。加入佇列的探測發生在 `preflight_jobs` 裡、持有 `command_lock` 期間，而前端把 Cancel、Pause、Retry、Reorder、Clear 串在同一個 `enqueueMutation` 之後，所以在探測返回之前這些操作都不可用；選檔階段的 `analyze_files` 不持有這個鎖，但它同樣要等探測返回才有結果。停止卡死的子進程不會讓慢來源變成可操作。
 
 ## 10. 參考資料
 

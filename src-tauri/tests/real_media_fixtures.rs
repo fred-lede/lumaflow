@@ -9,10 +9,18 @@ use lumaflow_lib::domain::job::{JobEvent, JobState, ProcessingKind, QueueJob, Qu
 use lumaflow_lib::domain::media::{MediaInfo, OutputFormat, OutputSettings, QualityPreset};
 use lumaflow_lib::jobs::{FfmpegRunner, JobExecution, Scheduler};
 use lumaflow_lib::media::planner::plan_conversion;
+#[cfg(target_os = "linux")]
+use lumaflow_lib::media::probe::ProcessCommandRunner;
 use lumaflow_lib::media::probe::{probe_media, CommandOutput, CommandRunner};
+#[cfg(target_os = "linux")]
+use lumaflow_lib::media::tools::{target_directory, ToolLocator};
 use lumaflow_lib::media::MediaError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::symlink;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 struct PinnedFfprobeRunner {
     program: PathBuf,
@@ -993,4 +1001,47 @@ fn real_fixture_probe_and_planner_matrix_and_ui_trace() {
     }
 
     assert!(fixture_directory.is_dir());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_ffprobe_hang_is_stopped_by_the_probe_watchdog() {
+    // The production runner, pointed at the pinned FFprobe, against the hang shape
+    // measured in the ledger: FFprobe blocked in open() on a FIFO nobody writes to.
+    // A short injected window keeps the advisory job fast; the shipped window is 120 s.
+    ensure_supported_platform();
+    let spec = load_trusted_spec();
+    let ffprobe = required_executable("LUMAFLOW_FFPROBE_TEST_BIN", &spec.ffprobe, "FFprobe");
+
+    let directory = TempDirectory::new("lumaflow-probe-hang");
+    let fifo = directory.path.join("silent.fifo");
+    let status = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo should be runnable");
+    assert!(status.success(), "mkfifo should succeed");
+
+    let bin_directory = directory.path.join("binaries").join(target_directory());
+    fs::create_dir_all(&bin_directory).expect("fixture binary directory should be creatable");
+    symlink(&ffprobe, bin_directory.join("ffprobe")).expect("FFprobe should be linked");
+
+    let tools = ToolLocator::bundled();
+    tools.set_resource_dir(&directory.path);
+    let runner = ProcessCommandRunner::with_tools(tools)
+        .with_stall_deadlines(Duration::from_secs(2), Duration::from_millis(100));
+
+    let started = Instant::now();
+    let error = probe_media(&runner, &fifo)
+        .expect_err("a FFprobe hung in open() should be stopped by the watchdog");
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        error.code, "probe_stalled",
+        "error details: {:?}",
+        error.details
+    );
+    assert!(
+        elapsed < Duration::from_secs(30),
+        "the watchdog should stop a hung FFprobe inside its window, took {elapsed:?}"
+    );
 }
