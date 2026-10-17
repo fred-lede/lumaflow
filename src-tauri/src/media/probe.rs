@@ -1177,9 +1177,18 @@ mod tests {
 #[cfg(all(test, unix))]
 mod process_runner_tests {
     use std::fs;
+    // Each of these three is consumed only by the linux-gated parked-read test below, so
+    // ungated they are unused imports on macOS and `clippy --all-targets -- -D warnings`
+    // goes red there (same Ruling 8 shape as the gated constants further down).
+    #[cfg(target_os = "linux")]
+    use std::fs::OpenOptions;
+    #[cfg(target_os = "linux")]
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    #[cfg(target_os = "linux")]
+    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
@@ -1321,6 +1330,71 @@ mod process_runner_tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("program=ffprobe"),
+            "error details: {:?}",
+            error.details
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the watchdog should act inside its window, took {:?}",
+            started.elapsed()
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    // Gated like the constants above: its only caller is the linux-gated test below, so
+    // ungated it would be dead code on macOS and trip `clippy --all-targets -- -D warnings`.
+    #[cfg(target_os = "linux")]
+    fn make_fifo(directory: &Path, name: &str) -> PathBuf {
+        let path = directory.join(name);
+        let status = Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo should be runnable");
+        assert!(status.success(), "mkfifo should succeed");
+        path
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stops_a_probe_child_parked_midway_through_a_read() {
+        // The real hang shape: a FIFO fed once, with the write end held open so the
+        // reader never sees EOF. The child reads 64 KiB and then parks inside read().
+        // The writer is this test process, so there is no orphan holding the FIFO.
+        let directory = fixture_directory("probe-parked-read");
+        let fifo = make_fifo(&directory, "silent.fifo");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            &format!("exec cat '{}'", fifo.display()),
+        );
+
+        let (keep_open_tx, keep_open_rx) = mpsc::channel::<()>();
+        let writer_fifo = fifo.clone();
+        let writer = thread::spawn(move || {
+            // O_RDWR, not O_WRONLY: opening a FIFO's write end blocks until a reader
+            // exists, so if the watchdog killed the child before it opened the FIFO the
+            // writer would sit in open() forever and hang the test. O_RDWR returns at
+            // once and still holds a write end open, so the child reads 64 KiB and then
+            // parks instead of seeing EOF — the hang shape is unchanged.
+            let mut handle = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&writer_fifo)
+                .expect("the FIFO write end should open");
+            let _ = handle.write_all(&[7_u8; 64 * 1024]);
+            // Hold the write end until the runner finishes, otherwise the child sees EOF.
+            let _ = keep_open_rx.recv();
+        });
+
+        let started = std::time::Instant::now();
+        let error = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect_err("a child parked inside read() should be stopped");
+        let _ = keep_open_tx.send(());
+        writer.join().expect("the FIFO writer should finish");
+
+        assert_eq!(
+            error.code, "probe_stalled",
             "error details: {:?}",
             error.details
         );
