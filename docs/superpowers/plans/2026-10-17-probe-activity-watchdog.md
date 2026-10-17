@@ -60,7 +60,6 @@ spec 暗示但沒有哪個 task 的測試直接覆蓋的失敗模式——每一
   - `fn prime_before_exec(path: &Path) -> ()`
   - `fn fake_tool(directory: &Path, tool: &str, body: &str) -> PathBuf`
   - `fn runner_for(directory: &Path) -> ProcessCommandRunner`
-  - `const STALL_WINDOW: Duration`／`const POLL_INTERVAL: Duration`（Task 3 才用得到）
 
 - [ ] **Step 1: 寫出 fixture helpers 與守門測試**
 
@@ -85,9 +84,6 @@ mod process_runner_tests {
     // same remedy as the fixture helper in src-tauri/src/jobs/runner.rs's tests.
     const PRIME_ARGUMENT: &str = "--prime";
     const ETXTBSY: i32 = 26;
-
-    const STALL_WINDOW: Duration = Duration::from_millis(300);
-    const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
     fn fixture_directory(name: &str) -> PathBuf {
         let directory =
@@ -392,6 +388,12 @@ git commit -m "feat(media): read the kernel activity counters that separate a pa
 在 `process_runner_tests` 內新增（`runner_with_windows` helper 也一起加）：
 
 ```rust
+    // The injected window and poll interval live here because this is the task that first
+    // consumes them: a constant nothing uses yet is a dead-code warning under
+    // `clippy --all-targets -- -D warnings`.
+    const STALL_WINDOW: Duration = Duration::from_millis(300);
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
     #[cfg(target_os = "linux")]
     fn runner_with_windows(
         directory: &Path,
@@ -615,7 +617,7 @@ Task 3 的測試打的是「從頭到尾沒讀」。帳本 Finding 7 的真實�
 - Modify: `src-tauri/src/media/probe.rs`（`process_runner_tests` 內新增 helper 與測試）
 
 **Interfaces:**
-- Consumes: Task 1 的 `fixture_directory`／`fake_tool`／`runner_with_windows`；Task 3 的 `probe_stalled`。
+- Consumes: Task 1 的 `fixture_directory`／`fake_tool`；Task 3 的 `runner_with_windows`、`STALL_WINDOW`／`POLL_INTERVAL` 與 `probe_stalled`。
 - Produces: `fn make_fifo(directory: &Path, name: &str) -> PathBuf`（測試 helper）。
 
 - [ ] **Step 1: 寫出形態覆蓋測試**
