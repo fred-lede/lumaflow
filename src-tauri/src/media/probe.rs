@@ -98,8 +98,15 @@ pub(crate) fn read_activity_sample(pid: u32) -> Result<ActivitySample, std::io::
 #[cfg(target_os = "linux")]
 pub const PROBE_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Sampling cadence, not a deadline. The kill decision is wall-clock — `last_activity.elapsed()`
+/// against `PROBE_STALL_TIMEOUT` — so this only sets how quickly the runner notices progress, and
+/// how quickly it notices a child that has already exited. Measured: with a 1 s cadence a child
+/// that exited a few ms after spawn was still charged a full poll (1.00 s in
+/// `captures_empty_streams_from_a_child_that_writes_nothing`), which would have added up to a
+/// second to every probe in the app. 100 ms keeps that invisible and costs about ten small
+/// `/proc` reads per second while a probe runs.
 #[cfg(target_os = "linux")]
-const PROBE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const PROBE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct ProcessCommandRunner {
@@ -191,8 +198,10 @@ impl ProcessCommandRunner {
         // by the elapsed window alone and is stopped when it expires.
         let mut last_activity = std::time::Instant::now();
         let mut previous: Option<ActivitySample> = None;
-        // Poll order matters: try_wait first, then sample, then decide, and only then
-        // sleep — a probe that finishes in 70 ms must not sleep out the rest of a poll.
+        // Poll order matters: try_wait first, then sample, then decide, and only then sleep.
+        // A child that has already exited when the loop starts is caught on the first
+        // `try_wait`; one that exits just after it is caught at the next tick, which is why the
+        // cadence above is 100 ms rather than a second.
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -1335,6 +1344,7 @@ mod process_runner_tests {
         // return empty vectors — not a truncated read, not a hang on a pipe nobody wrote.
         let directory = fixture_directory("probe-quiet");
         fake_tool(&directory, "ffprobe", "exit 0");
+        let started = std::time::Instant::now();
         let output = runner_for(&directory)
             .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
             .expect("a quiet child is still a completed probe");
@@ -1342,6 +1352,11 @@ mod process_runner_tests {
         assert_eq!(output.status, 0, "a clean exit must survive");
         assert!(output.stdout.is_empty(), "stdout: {:?}", output.stdout);
         assert!(output.stderr.is_empty(), "stderr: {:?}", output.stderr);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "a child that exits immediately must not be held by the poll cadence: {:?}",
+            started.elapsed()
+        );
         fs::remove_dir_all(&directory).expect("probe fixture should be removable");
     }
 
