@@ -1470,9 +1470,17 @@ mod process_runner_tests {
             "exec sh -c 'i=0; while [ $i -lt 500000 ]; do i=$((i+1)); done'",
         );
 
-        let output = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
-            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
-            .expect("a child that is computing must not be stopped");
+        // A tighter window than the other tests use: the fixture's runtime is a property of
+        // the machine's core, and a 300 ms window would silently stop exercising the kill
+        // decision on a core fast enough to finish the loop inside it. 150 ms over a 25 ms
+        // poll keeps the "window > 2 × poll" rule the production constructor asserts.
+        let output = runner_with_windows(
+            &directory,
+            Duration::from_millis(150),
+            Duration::from_millis(25),
+        )
+        .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+        .expect("a child that is computing must not be stopped");
 
         assert_eq!(output.status, 0, "stderr: {}", output.stderr);
         fs::remove_dir_all(&directory).expect("probe fixture should be removable");
