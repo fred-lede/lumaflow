@@ -386,7 +386,7 @@ chmod 755 src-tauri/binaries/<target>/ffmpeg src-tauri/binaries/<target>/ffprobe
 
 活動 watchdog 目前只在 Linux 生效。macOS 沒有 `/proc`，探測沿用沒有上限的等待行為，也就是本條描述的問題在 macOS 上仍存在；這是已記錄的缺口，不是已解決的支援。
 
-本條也沒有處理一個相鄰問題：**合法但很慢**的探測仍會凍結 UI，因為探測發生在持有 `command_lock` 期間，且前端把後續操作串在 `enqueueMutation` 後面。停止卡死的子進程不會讓慢來源變成可操作。
+本條也沒有處理一個相鄰問題：**合法但很慢**的探測仍會凍結 UI。加入佇列的探測發生在 `preflight_jobs` 裡、持有 `command_lock` 期間，而前端把 Cancel、Pause、Retry、Reorder、Clear 串在同一個 `enqueueMutation` 之後，所以在探測返回之前這些操作都不可用；選檔階段的 `analyze_files` 不持有這個鎖，但它同樣要等探測返回才有結果。停止卡死的子進程不會讓慢來源變成可操作。
 
 ## 10. 參考資料
 
