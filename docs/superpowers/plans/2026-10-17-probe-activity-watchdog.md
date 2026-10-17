@@ -702,7 +702,7 @@ Task 3 的測試打的是「從頭到尾沒讀」。帳本 Finding 7 的真實�
     }
 ```
 
-（`use std::fs::OpenOptions;` 與 `use std::sync::mpsc;` 加進 `process_runner_tests` 的 import 區塊。）
+（`use std::fs::OpenOptions;`、`use std::io::Write;` 與 `use std::sync::mpsc;` 加進 `process_runner_tests` 的 import 區塊，並各自 gate 在 `#[cfg(target_os = "linux")]`：它們只被 Linux-gated 的測試消費，在 macOS 建置會變成 unused import 而讓 `clippy --all-targets -- -D warnings` 變紅 — 同 Ruling 8。）
 
 - [ ] **Step 2: 跑測試**
 
