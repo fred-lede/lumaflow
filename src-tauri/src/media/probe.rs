@@ -20,6 +20,74 @@ pub trait CommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<CommandOutput, MediaError>;
 }
 
+/// A snapshot of the three kernel counters that separate "working" from "parked".
+/// `rchar` and `syscr` count bytes and calls of `read()`/`write()`; `utime + stime`
+/// counts CPU. Measured (see the ledger, Finding 8): the leader's `/proc/<pid>/io` and
+/// `/proc/<pid>/stat` already sum the whole thread group, so a multi-threaded ffmpeg
+/// whose main thread sits in `read()` while its filter threads work still shows
+/// movement, and walking `/proc/<pid>/task/*` would add cost without adding signal.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct ActivitySample {
+    read_bytes: u64,
+    read_calls: u64,
+    cpu_ticks: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl ActivitySample {
+    pub fn progressed_since(&self, previous: &Self) -> bool {
+        self.read_bytes != previous.read_bytes
+            || self.read_calls != previous.read_calls
+            || self.cpu_ticks != previous.cpu_ticks
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn parse_io_field(text: &str, field: &str) -> Option<u64> {
+    // `/proc/<pid>/io` has `rchar:` and `wchar:`, `syscr:` and `syscw:` side by side, so
+    // the key must match exactly after trimming; a loose `starts_with`
+    // or `contains` would return the wrong counter, and a wrong counter is a wrong
+    // watchdog decision.
+    text.lines().find_map(|line| match line.split_once(':') {
+        Some((key, value)) if key.trim() == field => value.trim().parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub fn parse_stat_cpu(text: &str) -> Option<u64> {
+    // The comm field (field 2) may contain spaces and parentheses, so count from the
+    // last ')'. The remainder starts at field 3 (state), making utime index 11 and
+    // stime index 12 (1-based fields 14 and 15).
+    let (_, remainder) = text.rsplit_once(')')?;
+    let fields: Vec<&str> = remainder.split_whitespace().collect();
+    let utime = fields.get(11)?.parse::<u64>().ok()?;
+    let stime = fields.get(12)?.parse::<u64>().ok()?;
+    Some(utime + stime)
+}
+
+#[cfg(target_os = "linux")]
+pub fn read_activity_sample(pid: u32) -> Result<ActivitySample, std::io::Error> {
+    let io_text = std::fs::read_to_string(format!("/proc/{pid}/io"))?;
+    let stat_text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let (Some(read_bytes), Some(read_calls), Some(cpu_ticks)) = (
+        parse_io_field(&io_text, "rchar"),
+        parse_io_field(&io_text, "syscr"),
+        parse_stat_cpu(&stat_text),
+    ) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("could not read the activity counters of pid {pid}"),
+        ));
+    };
+    Ok(ActivitySample {
+        read_bytes,
+        read_calls,
+        cpu_ticks,
+    })
+}
+
 #[derive(Clone)]
 pub struct ProcessCommandRunner {
     tools: ToolLocator,
@@ -934,5 +1002,99 @@ mod process_runner_tests {
         assert_eq!(output.stdout, "probe-json\n");
         assert_eq!(output.stderr, "probe-error\n");
         fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod activity_tests {
+    use super::{parse_io_field, parse_stat_cpu, read_activity_sample, ActivitySample};
+
+    // The exact field set of a real /proc/<pid>/io (verified against a live one).
+    const IO_TEXT: &str = "rchar: 1048576\nwchar: 4096\nsyscr: 8\nsyscw: 999\n\
+        read_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
+
+    // utime is field 14 and stime field 15, but the comm field (2) may contain spaces
+    // and parentheses, so the parse must count from the last ')'. In this line utime=123
+    // and stime=45.
+    const STAT_TEXT: &str = "1234 (ffprobe (odd) name) S 1 1234 1234 0 -1 4207616 100 0 \
+        0 0 123 45 0 0 20 0 1 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 \n";
+
+    #[test]
+    fn parses_io_counters_without_matching_a_similarly_named_field() {
+        assert_eq!(parse_io_field(IO_TEXT, "rchar"), Some(1_048_576));
+        assert_eq!(parse_io_field(IO_TEXT, "syscr"), Some(8));
+        assert_eq!(parse_io_field(IO_TEXT, "wchar"), Some(4096));
+        assert_eq!(parse_io_field(IO_TEXT, "syscw"), Some(999));
+        // A prefix of a real key must not match it. `wchar` is the near-miss for `rchar`
+        // and `syscw` for `syscr`, so a parse that matches loosely returns the wrong
+        // counter — and a wrong counter is a wrong watchdog decision.
+        assert_eq!(parse_io_field(IO_TEXT, "rcha"), None);
+        assert_eq!(parse_io_field(IO_TEXT, "sysc"), None);
+        assert_eq!(parse_io_field(IO_TEXT, "absent"), None);
+    }
+
+    #[test]
+    fn parses_cpu_ticks_from_a_stat_line_whose_command_contains_parentheses() {
+        assert_eq!(parse_stat_cpu(STAT_TEXT), Some(168));
+        assert_eq!(parse_stat_cpu("1234 (x) S"), None);
+    }
+
+    #[test]
+    fn a_sample_progresses_when_any_counter_moves_but_not_when_all_are_frozen() {
+        let previous = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 4,
+            cpu_ticks: 10,
+        };
+        let frozen = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 4,
+            cpu_ticks: 10,
+        };
+        let reading = ActivitySample {
+            read_bytes: 1_001,
+            read_calls: 4,
+            cpu_ticks: 10,
+        };
+        let counting = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 5,
+            cpu_ticks: 10,
+        };
+        // A child whose input is already fully read and whose filters are decoding burns
+        // CPU without reading a byte. That is activity, not a stall.
+        let computing = ActivitySample {
+            read_bytes: 1_000,
+            read_calls: 4,
+            cpu_ticks: 11,
+        };
+
+        assert!(!frozen.progressed_since(&previous));
+        assert!(reading.progressed_since(&previous));
+        assert!(counting.progressed_since(&previous));
+        assert!(computing.progressed_since(&previous));
+    }
+
+    #[test]
+    fn a_child_that_is_gone_reports_an_error_instead_of_a_sample() {
+        // u32::MAX is not a valid pid on any Linux box (pid_max tops out near 4 million),
+        // so this is a guaranteed ENOENT. The watchdog must treat an unreadable child as
+        // "do not act", never as "stalled".
+        let error = read_activity_sample(u32::MAX)
+            .expect_err("a pid that does not exist should not produce a sample");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 }
