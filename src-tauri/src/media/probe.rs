@@ -1405,6 +1405,78 @@ mod process_runner_tests {
         );
         fs::remove_dir_all(&directory).expect("probe fixture should be removable");
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeps_a_probe_child_that_keeps_reading_bytes() {
+        // Slow but genuinely progressing: 4 KiB every 40 ms for 400 ms, which is longer
+        // than the 300 ms stall window. Every poll sees the counters move, so the child
+        // must run to its natural exit and its whole stdout must arrive.
+        let directory = fixture_directory("probe-reading");
+        let fifo = make_fifo(&directory, "steady.fifo");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            &format!("exec cat '{}'", fifo.display()),
+        );
+
+        let writer_fifo = fifo.clone();
+        let writer = thread::spawn(move || {
+            // O_RDWR, not O_WRONLY: opening a FIFO's write end blocks until a reader
+            // exists, so if the watchdog killed the child first the writer would sit in
+            // open() forever and `writer.join()` would hang this test. O_RDWR returns at
+            // once and the writes still land in the pipe; dropping the handle at the end
+            // of the closure is what closes the write end so cat reaches EOF and exits 0.
+            let mut handle = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&writer_fifo)
+                .expect("the FIFO write end should open");
+            for _ in 0..10 {
+                if handle.write_all(&[9_u8; 4 * 1024]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(40));
+            }
+            // Closing the write end is what lets cat reach EOF and exit 0.
+        });
+
+        let output = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a child that keeps reading must not be stopped");
+        writer.join().expect("the FIFO writer should finish");
+
+        assert_eq!(output.status, 0, "stderr: {}", output.stderr);
+        assert_eq!(
+            output.stdout.len(),
+            10 * 4 * 1024,
+            "every byte must be captured"
+        );
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeps_a_probe_child_that_burns_cpu_without_reading() {
+        // The decode/filters phase of a probe: everything is already read and the child
+        // only computes. A pure-builtin shell loop burns CPU in the watched pid itself
+        // (dash runs about 1.25 M iterations per second, so 500 000 is ~0.4 s here and
+        // only slower, never shorter, on a shared runner). `exec` keeps the same pid, so
+        // the counters being sampled are the counters doing the work.
+        let directory = fixture_directory("probe-computing");
+        fake_tool(
+            &directory,
+            "ffprobe",
+            "exec sh -c 'i=0; while [ $i -lt 500000 ]; do i=$((i+1)); done'",
+        );
+
+        let output = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a child that is computing must not be stopped");
+
+        assert_eq!(output.status, 0, "stderr: {}", output.stderr);
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
