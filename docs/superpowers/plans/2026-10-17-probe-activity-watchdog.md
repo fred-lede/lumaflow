@@ -206,7 +206,8 @@ watchdog 的判定核心先當純函式做：給一段 kernel 格式的文字，
 mod activity_tests {
     use super::{parse_io_field, parse_stat_cpu, read_activity_sample, ActivitySample};
 
-    const IO_TEXT: &str = "rchar: 1048576\nwchar: 4096\nsyschr: 999\nsyschw: 8\n\
+    // The exact field set of a real /proc/<pid>/io (verified against a live one).
+    const IO_TEXT: &str = "rchar: 1048576\nwchar: 4096\nsyscr: 8\nsyscw: 999\n\
         read_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
 
     // utime is field 14 and stime field 15, but the comm field (2) may contain spaces
@@ -234,7 +235,13 @@ mod activity_tests {
     fn parses_io_counters_without_matching_a_similarly_named_field() {
         assert_eq!(parse_io_field(IO_TEXT, "rchar"), Some(1_048_576));
         assert_eq!(parse_io_field(IO_TEXT, "syscr"), Some(8));
-        assert_eq!(parse_io_field(IO_TEXT, "syschr"), Some(999));
+        assert_eq!(parse_io_field(IO_TEXT, "wchar"), Some(4096));
+        assert_eq!(parse_io_field(IO_TEXT, "syscw"), Some(999));
+        // A prefix of a real key must not match it. `wchar` is the near-miss for `rchar`
+        // and `syscw` for `syscr`, so a parse that matches loosely returns the wrong
+        // counter — and a wrong counter is a wrong watchdog decision.
+        assert_eq!(parse_io_field(IO_TEXT, "rcha"), None);
+        assert_eq!(parse_io_field(IO_TEXT, "sysc"), None);
         assert_eq!(parse_io_field(IO_TEXT, "absent"), None);
     }
 
@@ -308,7 +315,7 @@ impl ActivitySample {
 }
 ```
 
-`parse_io_field`：逐行 `split_once(':')`，**key 必須全等**（`trim` 後），再 `parse::<u64>()`。不可用 `starts_with`：`/proc/<pid>/io` 同時有 `rchar:` 與 `syschr:`，前綴比對會誤抓。
+`parse_io_field`：逐行 `split_once(':')`，**key 必須全等**（`trim` 後），再 `parse::<u64>()`。不可用 `starts_with` 或 `contains`：一個真實的 `/proc/<pid>/io` 同時有 `rchar:` 與 `wchar:`、`syscr:` 與 `syscw:`，寬鬆比對會回傳錯的 counter，而錯的 counter 就是錯的 watchdog 判定。
 
 `parse_stat_cpu`：`text.rsplit_once(')')` 取最後一個 `)` 之後的餘額，`split_whitespace()`，索引 **11 = utime、12 = stime**（餘額索引 0 是 state，即 1-based 的欄位 3；utime／stime 是 1-based 的 14／15）。任何缺欄位或解析失敗回 `None`。
 
