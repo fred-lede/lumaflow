@@ -10,6 +10,7 @@ use crate::domain::media::{
 use super::tools::ToolLocator;
 use super::MediaError;
 
+#[derive(Debug)]
 pub struct CommandOutput {
     pub status: i32,
     pub stdout: String,
@@ -28,7 +29,7 @@ pub trait CommandRunner {
 /// movement, and walking `/proc/<pid>/task/*` would add cost without adding signal.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
-pub struct ActivitySample {
+pub(crate) struct ActivitySample {
     read_bytes: u64,
     read_calls: u64,
     cpu_ticks: u64,
@@ -36,7 +37,7 @@ pub struct ActivitySample {
 
 #[cfg(target_os = "linux")]
 impl ActivitySample {
-    pub fn progressed_since(&self, previous: &Self) -> bool {
+    pub(crate) fn progressed_since(&self, previous: &Self) -> bool {
         self.read_bytes != previous.read_bytes
             || self.read_calls != previous.read_calls
             || self.cpu_ticks != previous.cpu_ticks
@@ -44,7 +45,7 @@ impl ActivitySample {
 }
 
 #[cfg(target_os = "linux")]
-pub fn parse_io_field(text: &str, field: &str) -> Option<u64> {
+pub(crate) fn parse_io_field(text: &str, field: &str) -> Option<u64> {
     // `/proc/<pid>/io` has `rchar:` and `wchar:`, `syscr:` and `syscw:` side by side, so
     // the key must match exactly after trimming; a loose `starts_with`
     // or `contains` would return the wrong counter, and a wrong counter is a wrong
@@ -56,7 +57,7 @@ pub fn parse_io_field(text: &str, field: &str) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn parse_stat_cpu(text: &str) -> Option<u64> {
+pub(crate) fn parse_stat_cpu(text: &str) -> Option<u64> {
     // The comm field (field 2) may contain spaces and parentheses, so count from the
     // last ')'. The remainder starts at field 3 (state), making utime index 11 and
     // stime index 12 (1-based fields 14 and 15).
@@ -68,7 +69,7 @@ pub fn parse_stat_cpu(text: &str) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn read_activity_sample(pid: u32) -> Result<ActivitySample, std::io::Error> {
+pub(crate) fn read_activity_sample(pid: u32) -> Result<ActivitySample, std::io::Error> {
     let io_text = std::fs::read_to_string(format!("/proc/{pid}/io"))?;
     let stat_text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
     let (Some(read_bytes), Some(read_calls), Some(cpu_ticks)) = (
@@ -88,20 +89,192 @@ pub fn read_activity_sample(pid: u32) -> Result<ActivitySample, std::io::Error> 
     })
 }
 
+/// How long a probe child may go without reading a byte or burning CPU before the
+/// watchdog stops it. This is a gap between activity samples, not a total-runtime
+/// deadline: a probe that really is reading is never stopped, and a throttled probe that
+/// legitimately spends 230 s reading 241 MB of a fragmented MP4 (ledger Finding 4) stays
+/// alive. 120 s is deliberately generous — a hard-mounted NFS source can take 60-180 s
+/// between reads — and matches the FFmpeg watchdog's window in src-tauri/src/jobs/runner.rs.
+#[cfg(target_os = "linux")]
+pub const PROBE_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[cfg(target_os = "linux")]
+const PROBE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(Clone)]
 pub struct ProcessCommandRunner {
     tools: ToolLocator,
+    #[cfg(target_os = "linux")]
+    stall_timeout: std::time::Duration,
+    #[cfg(target_os = "linux")]
+    poll_interval: std::time::Duration,
 }
 
 impl ProcessCommandRunner {
     pub fn system() -> Self {
         Self {
             tools: ToolLocator::system(),
+            #[cfg(target_os = "linux")]
+            stall_timeout: PROBE_STALL_TIMEOUT,
+            #[cfg(target_os = "linux")]
+            poll_interval: PROBE_POLL_INTERVAL,
         }
     }
 
     pub fn with_tools(tools: ToolLocator) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            #[cfg(target_os = "linux")]
+            stall_timeout: PROBE_STALL_TIMEOUT,
+            #[cfg(target_os = "linux")]
+            poll_interval: PROBE_POLL_INTERVAL,
+        }
+    }
+
+    /// Overrides the watchdog window. Production release builds do not compile this
+    /// method at all, so the shipped app always uses `PROBE_STALL_TIMEOUT`. Tests use a
+    /// short window so the stall paths are exercised without waiting two minutes, and a
+    /// window shorter than two polls would stop a healthy probe, so nothing may ask for
+    /// one.
+    #[cfg(all(target_os = "linux", any(test, debug_assertions)))]
+    pub fn with_stall_deadlines(
+        mut self,
+        stall_timeout: std::time::Duration,
+        poll_interval: std::time::Duration,
+    ) -> Self {
+        debug_assert!(
+            stall_timeout > poll_interval * 2,
+            "a stall window shorter than two polls would fire between samples of a healthy child"
+        );
+        self.stall_timeout = stall_timeout;
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_guarded(
+        &self,
+        program: &str,
+        executable: &Path,
+        args: &[String],
+    ) -> Result<CommandOutput, MediaError> {
+        // Stdin must be nulled explicitly: Command::output() does it for you, spawn()
+        // inherits the parent's stdin, and a probe that inherits a terminal would block
+        // on a read of its own.
+        let mut child = std::process::Command::new(executable)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                MediaError::with_details(
+                    "probe_command_error",
+                    "FFprobe could not be started",
+                    error.to_string(),
+                )
+            })?;
+
+        // Both streams are drained on their own threads, so a child that fills a pipe
+        // buffer never blocks on a write — which would look exactly like a stalled read.
+        // Assumes the child is a leaf process: a grandchild holding a pipe open would
+        // keep the join waiting after the child is gone (same documented assumption as
+        // the FFmpeg watchdog in src-tauri/src/jobs/runner.rs).
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let stdout_thread = std::thread::spawn(move || read_stream_to_end(stdout));
+        let stderr_thread = std::thread::spawn(move || read_stream_to_end(stderr));
+
+        let pid = child.id();
+        // The window timer starts at spawn, not at the first sample: the first sample has
+        // no previous one to compare against, so a child that never reads a byte is judged
+        // by the elapsed window alone and is stopped when it expires.
+        let mut last_activity = std::time::Instant::now();
+        let mut previous: Option<ActivitySample> = None;
+        // Poll order matters: try_wait first, then sample, then decide, and only then
+        // sleep — a probe that finishes in 70 ms must not sleep out the rest of a poll.
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Both the success and the stall path join the drain threads, and the
+                    // output assembly matches the pre-watchdog `Command::output()` body:
+                    // exit code with -1 for a signal, lossy UTF-8 streams.
+                    let stdout_bytes = join_drained(stdout_thread)?;
+                    let stderr_bytes = join_drained(stderr_thread)?;
+                    return Ok(CommandOutput {
+                        status: status.code().unwrap_or(-1),
+                        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+                        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+                    });
+                }
+                Ok(None) => {
+                    if let Ok(sample) = read_activity_sample(pid) {
+                        // A child we cannot sample is a child we must not kill: the
+                        // watchdog only ever acts on counters it actually read. A failed
+                        // sample neither refreshes the window nor kills the child.
+                        if previous
+                            .as_ref()
+                            .is_some_and(|was| sample.progressed_since(was))
+                        {
+                            last_activity = std::time::Instant::now();
+                        }
+                        previous = Some(sample);
+                    }
+                    if last_activity.elapsed() >= self.stall_timeout {
+                        return Err(stalled_probe_error(
+                            program,
+                            child,
+                            stdout_thread,
+                            stderr_thread,
+                            last_activity.elapsed(),
+                        ));
+                    }
+                    std::thread::sleep(self.poll_interval);
+                }
+                Err(error) => {
+                    // try_wait itself failed, so the child's state is unknown: stop it
+                    // before reporting the failure as a command error.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    return Err(MediaError::with_details(
+                        "probe_command_error",
+                        "FFprobe could not be started",
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// macOS and Windows keep today's behaviour: a blocking `output()` with no activity
+    /// watchdog. The probe watchdog is Linux-only for now; on the other platforms a
+    /// child parked on an unreadable input still blocks its caller — a known platform
+    /// gap, documented here rather than fixed by this change.
+    #[cfg(not(target_os = "linux"))]
+    fn run_unguarded(
+        &self,
+        _program: &str,
+        executable: &Path,
+        args: &[String],
+    ) -> Result<CommandOutput, MediaError> {
+        let output = std::process::Command::new(executable)
+            .args(args)
+            .output()
+            .map_err(|error| {
+                MediaError::with_details(
+                    "probe_command_error",
+                    "FFprobe could not be started",
+                    error.to_string(),
+                )
+            })?;
+
+        Ok(CommandOutput {
+            status: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
     }
 }
 
@@ -120,22 +293,102 @@ impl CommandRunner for ProcessCommandRunner {
                 error.to_string(),
             )
         })?;
-        let output = std::process::Command::new(executable)
-            .args(args)
-            .output()
-            .map_err(|error| {
-                MediaError::with_details(
-                    "probe_command_error",
-                    "FFprobe could not be started",
-                    error.to_string(),
-                )
-            })?;
+        #[cfg(target_os = "linux")]
+        return self.run_guarded(program, &executable, args);
+        #[cfg(not(target_os = "linux"))]
+        return self.run_unguarded(program, &executable, args);
+    }
+}
 
-        Ok(CommandOutput {
-            status: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
+/// Stops a child the watchdog decided is stuck and builds the error the probe reports.
+/// Killing the child closes the pipe write ends, so both drain threads reach EOF and
+/// join promptly — assuming the child is a leaf process; a grandchild holding a pipe
+/// open would keep the joins waiting (same documented assumption as the FFmpeg watchdog
+/// in src-tauri/src/jobs/runner.rs). A drain thread that panicked or failed its read is
+/// reported as `probe_command_error` instead of a stall: an unreadable stream is a
+/// broken command, not evidence the child was parked.
+#[cfg(target_os = "linux")]
+fn stalled_probe_error(
+    program: &str,
+    mut child: std::process::Child,
+    stdout: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    idle: std::time::Duration,
+) -> MediaError {
+    let _ = child.kill();
+    let _ = child.wait();
+    if let Err(error) = join_drained(stdout) {
+        return error;
+    }
+    let stderr_text = match join_drained(stderr) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => return error,
+    };
+
+    let mut details = format!("program={program} idle_for={}", humanize_window(idle));
+    // Same shape as the FFmpeg watchdog's stalled_error: hand the user the stderr the
+    // child managed to produce before it parked.
+    if !stderr_text.is_empty() {
+        details.push('\n');
+        details.push_str(&stderr_text);
+    }
+    MediaError::with_details(
+        "probe_stalled",
+        format!(
+            "{} made no progress reading or decoding for {} and was stopped",
+            tool_label(program),
+            humanize_window(idle)
+        ),
+        details,
+    )
+}
+
+/// Joins one drain thread and unwraps its read. A thread that panicked or a read that
+/// failed is reported as `probe_command_error` rather than silently truncated output,
+/// matching what `Command::output()` would have surfaced.
+#[cfg(target_os = "linux")]
+fn join_drained(
+    thread: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, MediaError> {
+    match thread.join() {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(MediaError::with_details(
+            "probe_command_error",
+            "FFprobe could not be started",
+            error.to_string(),
+        )),
+        Err(_) => Err(MediaError::with_details(
+            "probe_command_error",
+            "FFprobe could not be started",
+            "the stream drain thread failed",
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_stream_to_end<R: std::io::Read>(mut stream: R) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Renders a watchdog window for an error message: whole seconds as "N seconds",
+/// sub-second windows as "N ms".
+#[cfg(target_os = "linux")]
+fn humanize_window(window: std::time::Duration) -> String {
+    if window.as_secs() > 0 {
+        format!("{} seconds", window.as_secs())
+    } else {
+        format!("{} ms", window.subsec_millis())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tool_label(program: &str) -> &str {
+    match program {
+        "ffprobe" => "FFprobe",
+        "ffmpeg" => "FFmpeg",
+        other => other,
     }
 }
 
@@ -1001,6 +1254,76 @@ mod process_runner_tests {
         assert_eq!(output.status, 3, "the child's exit code must survive");
         assert_eq!(output.stdout, "probe-json\n");
         assert_eq!(output.stderr, "probe-error\n");
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    // The injected window and poll interval live here because this is the task that first
+    // consumes them: a constant nothing uses yet is a dead-code warning under
+    // `clippy --all-targets -- -D warnings`.
+    const STALL_WINDOW: Duration = Duration::from_millis(300);
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+    #[cfg(target_os = "linux")]
+    fn runner_with_windows(
+        directory: &Path,
+        stall_timeout: Duration,
+        poll_interval: Duration,
+    ) -> ProcessCommandRunner {
+        runner_for(directory).with_stall_deadlines(stall_timeout, poll_interval)
+    }
+
+    #[test]
+    fn captures_empty_streams_from_a_child_that_writes_nothing() {
+        // The other half of the guard Task 1 started, added here because this is the task
+        // that replaces `Command::output()` with `spawn()` plus two drain threads: a real
+        // `ffprobe -v error` on a clean file writes nothing at all, so the rewrite must
+        // return empty vectors — not a truncated read, not a hang on a pipe nobody wrote.
+        let directory = fixture_directory("probe-quiet");
+        fake_tool(&directory, "ffprobe", "exit 0");
+        let output = runner_for(&directory)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect("a quiet child is still a completed probe");
+
+        assert_eq!(output.status, 0, "a clean exit must survive");
+        assert!(output.stdout.is_empty(), "stdout: {:?}", output.stdout);
+        assert!(output.stderr.is_empty(), "stderr: {:?}", output.stderr);
+        fs::remove_dir_all(&directory).expect("probe fixture should be removable");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stops_a_probe_child_that_stops_reading() {
+        // `exec` replaces the shell with an idle process: the watched child stays alive,
+        // reads nothing and burns nothing, which is the shape of ffprobe blocked in
+        // open() on a FIFO nobody writes to. The sleep is bounded so the pre-watchdog
+        // red run fails in 20 s rather than forever.
+        let directory = fixture_directory("probe-stall");
+        fake_tool(&directory, "ffprobe", "exec sleep 20");
+        let started = std::time::Instant::now();
+        let error = runner_with_windows(&directory, STALL_WINDOW, POLL_INTERVAL)
+            .run("ffprobe", &["-v".to_owned(), "error".to_owned()])
+            .expect_err("a probe child that reads nothing should be stopped");
+
+        assert_eq!(
+            error.code, "probe_stalled",
+            "error details: {:?}",
+            error.details
+        );
+        assert!(error.message.contains("stopped"), "error message: {error}");
+        assert!(
+            error
+                .details
+                .as_deref()
+                .unwrap_or_default()
+                .contains("program=ffprobe"),
+            "error details: {:?}",
+            error.details
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the watchdog should act inside its window, took {:?}",
+            started.elapsed()
+        );
         fs::remove_dir_all(&directory).expect("probe fixture should be removable");
     }
 }
